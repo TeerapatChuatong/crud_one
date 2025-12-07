@@ -1,6 +1,11 @@
 <?php
 require_once __DIR__ . '/../db.php';
 
+// ให้แน่ใจว่ามี session (เผื่อ db.php ยังไม่ได้เรียก)
+if (session_status() === PHP_SESSION_NONE) {
+  session_start();
+}
+
 /**
  * อ่าน body ให้รองรับทั้ง JSON และ form-urlencoded / form-data
  */
@@ -90,12 +95,16 @@ try {
   $_SESSION['user_id'] = $uid;
   $_SESSION['role']    = 'user';
 
-  // ส่งผลลัพธ์กลับ (ไม่ใช้ token แล้ว)
+  // ✅ สร้าง token ให้เหมือน login.php (ใช้ random string)
+  $token = bin2hex(random_bytes(32));
+
+  // ส่งผลลัพธ์กลับ (มี token ด้วย เพื่อให้ Flutter ใช้งานได้)
   json_ok([
     "id"       => $uid,
     "username" => $username,
     "email"    => $email,
-    "role"     => "user"
+    "role"     => "user",
+    "token"    => $token,
   ]);
 
 } catch (Throwable $e) {

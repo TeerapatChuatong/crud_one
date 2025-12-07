@@ -1,9 +1,10 @@
 <?php
-// CORS + JSON
-header("Access-Control-Allow-Origin: *");
-header("Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type");
-header("Content-Type: application/json; charset=utf-8");
+require_once __DIR__ . '/../db.php';
+
+// ให้แน่ใจว่ามี session (กันเหนียว)
+if (session_status() === PHP_SESSION_NONE) {
+  session_start();
+}
 
 $method = $_SERVER["REQUEST_METHOD"];
 
@@ -13,18 +14,10 @@ if ($method === 'OPTIONS') {
 }
 
 if (!in_array($method, ['PATCH','POST'], true)) {
-  http_response_code(405);
-  echo json_encode(['status' => 'error', 'message' => 'method_not_allowed']);
-  exit;
+  json_err("METHOD_NOT_ALLOWED", "method_not_allowed", 405);
 }
 
-/* ต่อ DB */
-require_once __DIR__ . '/../db.php';
-if (!isset($dbh) && isset($pdo)) {
-  $dbh = $pdo;
-}
-
-/* ===== อ่าน body ===== */
+/* ===== อ่าน body (JSON) ===== */
 $body = json_decode(file_get_contents("php://input"), true) ?: [];
 
 /*
@@ -41,9 +34,7 @@ if (isset($body['id']) && is_numeric($body['id'])) {
 }
 
 if (!$id) {
-  http_response_code(400);
-  echo json_encode(['status' => 'error', 'message' => 'invalid_or_missing_id']);
-  exit;
+  json_err("VALIDATION_ERROR", "invalid_or_missing_id", 400);
 }
 
 try {
@@ -58,49 +49,51 @@ try {
   $user = $q->fetch(PDO::FETCH_ASSOC);
 
   if (!$user) {
-    http_response_code(404);
-    echo json_encode(['status' => 'error', 'message' => 'user_not_found']);
-    exit;
+    json_err("NOT_FOUND", "user_not_found", 404);
   }
 
   // ---- username (อาจจะส่งมาหรือไม่ก็ได้) ----
   $hasUsername = array_key_exists('username', $body);
-  $username = $hasUsername ? trim($body['username']) : $user['username'];
+  $username = $hasUsername ? trim((string)$body['username']) : $user['username'];
 
   if ($hasUsername && $username === '') {
-    http_response_code(400);
-    echo json_encode(['status' => 'error', 'message' => 'invalid_username']);
-    exit;
+    json_err("VALIDATION_ERROR", "invalid_username", 400);
   }
 
   // ---- email (อาจจะส่งมาหรือไม่ก็ได้) ----
   $hasEmail = array_key_exists('email', $body);
-  $email = $hasEmail ? trim($body['email']) : $user['email'];
+  $email = $hasEmail ? trim((string)$body['email']) : $user['email'];
 
   if ($hasEmail) {
     if ($email === '') {
-      http_response_code(400);
-      echo json_encode(['status' => 'error', 'message' => 'invalid_email']);
-      exit;
+      json_err("VALIDATION_ERROR", "invalid_email", 400);
     }
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-      http_response_code(400);
-      echo json_encode(['status' => 'error', 'message' => 'invalid_email']);
-      exit;
+      json_err("VALIDATION_ERROR", "invalid_email", 400);
     }
   }
 
   // ---- password (เปลี่ยนได้ถ้าส่ง current + new มา) ----
-  $currentPassword = $body['current_password'] ?? '';
-  $newPassword     = $body['new_password']     ?? '';
+  $currentPassword = (string)($body['current_password'] ?? '');
+  $newPassword     = (string)($body['new_password']     ?? '');
 
   // ถ้าไม่มีอะไรจะเปลี่ยนเลย
   if (!$hasUsername && !$hasEmail && $newPassword === '') {
-    echo json_encode([
-      'status'  => 'ok',
-      'message' => 'no_change'
-    ]);
-    exit;
+    // ส่งข้อมูลเดิมกลับ พร้อม message
+    $resp = [
+      'id'       => (int)$user['id'],
+      'username' => $user['username'],
+      'email'    => $user['email'],
+      'role'     => $user['role'],
+      'message'  => 'no_change',
+    ];
+    // เผื่อฝั่ง Flutter อยากใช้ token จาก session_id
+    $token = session_id();
+    if ($token) {
+      $resp['token'] = $token;
+    }
+
+    json_ok($resp);
   }
 
   // ===== เช็ค username / email ซ้ำกับ user อื่น =====
@@ -115,18 +108,12 @@ try {
 
   if ($dup) {
     if (strcasecmp($dup['email'], $email) === 0) {
-      http_response_code(409);
-      echo json_encode(['status' => 'error', 'message' => 'email_exists']);
-      exit;
+      json_err("DUPLICATE", "email_exists", 409);
     }
     if (strcasecmp($dup['username'], $username) === 0) {
-      http_response_code(409);
-      echo json_encode(['status' => 'error', 'message' => 'username_exists']);
-      exit;
+      json_err("DUPLICATE", "username_exists", 409);
     }
-    http_response_code(409);
-    echo json_encode(['status' => 'error', 'message' => 'username_or_email_exists']);
-    exit;
+    json_err("DUPLICATE", "username_or_email_exists", 409);
   }
 
   // ===== เตรียมฟิลด์ UPDATE =====
@@ -146,21 +133,11 @@ try {
   // ===== จัดการเปลี่ยนรหัสผ่าน =====
   if ($newPassword !== '') {
     if ($currentPassword === '') {
-      http_response_code(400);
-      echo json_encode([
-        'status'  => 'error',
-        'message' => 'current_password_required'
-      ]);
-      exit;
+      json_err("VALIDATION_ERROR", "current_password_required", 400);
     }
 
     if (!password_verify($currentPassword, $user['password_hash'])) {
-      http_response_code(400);
-      echo json_encode([
-        'status'  => 'error',
-        'message' => 'current_password_incorrect'
-      ]);
-      exit;
+      json_err("VALIDATION_ERROR", "current_password_incorrect", 400);
     }
 
     $fields[] = "password_hash = ?";
@@ -168,11 +145,19 @@ try {
   }
 
   if (empty($fields)) {
-    echo json_encode([
-      'status'  => 'ok',
-      'message' => 'no_change'
-    ]);
-    exit;
+    // ถึงตรงนี้ แปลว่า username/email เหมือนเดิม และไม่ได้เปลี่ยน password จริง ๆ
+    $resp = [
+      'id'       => (int)$user['id'],
+      'username' => $user['username'],
+      'email'    => $user['email'],
+      'role'     => $user['role'],
+      'message'  => 'no_change',
+    ];
+    $token = session_id();
+    if ($token) {
+      $resp['token'] = $token;
+    }
+    json_ok($resp);
   }
 
   // ===== UPDATE =====
@@ -181,23 +166,22 @@ try {
   $stmt = $dbh->prepare($sql);
   $stmt->execute($params);
 
-  echo json_encode([
-    'status'  => 'ok',
-    'message' => 'profile_updated',
-    'data'    => [
-      'id'       => (int)$user['id'],
-      'username' => $username,
-      'email'    => $email,
-      'role'     => $user['role'],   // ไม่ให้แก้ role แต่ส่งกลับให้ดูได้
-    ]
-  ], JSON_UNESCAPED_UNICODE);
+  $resp = [
+    'id'       => (int)$user['id'],
+    'username' => $username,
+    'email'    => $email,
+    'role'     => $user['role'],   // ไม่ให้แก้ role แต่ส่งกลับให้ดูได้
+    'message'  => 'profile_updated',
+  ];
 
-  $dbh = null;
+  // เพิ่ม token จาก session_id เผื่อฝั่ง Flutter จะใช้
+  $token = session_id();
+  if ($token) {
+    $resp['token'] = $token;
+  }
+
+  json_ok($resp);
 
 } catch (Throwable $e) {
-  http_response_code(500);
-  echo json_encode([
-    'status'  => 'error',
-    'message' => 'db_error'
-  ]);
+  json_err("DB_ERROR", "db_error", 500);
 }

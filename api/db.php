@@ -10,6 +10,7 @@ $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 $allowed = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
+  'http://localhost:5174',
 ];
 
 if ($origin && in_array($origin, $allowed, true)) {
@@ -58,6 +59,7 @@ $is_https = (
   (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
   || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
 );
+
 session_set_cookie_params([
   'lifetime' => 60*60*24*7,
   'path'     => '/',
@@ -65,39 +67,55 @@ session_set_cookie_params([
   'httponly' => true,
   'samesite' => $is_https ? 'None' : 'Lax',
 ]);
+
 if (session_status() === PHP_SESSION_NONE) session_start();
 
 /* ================= Helpers ================= */
 if (!function_exists('json_ok')) {
-    function json_ok($d = []) {
-      echo json_encode(["ok"=>true, "data"=>$d], JSON_UNESCAPED_UNICODE);
-      exit;
-    }
+  function json_ok($d = []) {
+    echo json_encode(["ok"=>true, "data"=>$d], JSON_UNESCAPED_UNICODE);
+    exit;
+  }
 }
 
 if (!function_exists('json_err')) {
-    function json_err($code, $msg='', $status=400) {
-      http_response_code($status);
-      echo json_encode(["ok"=>false, "error"=>$code, "message"=>$msg], JSON_UNESCAPED_UNICODE);
-      exit;
-    }
+  function json_err($code, $msg='', $status=400) {
+    http_response_code($status);
+    echo json_encode(["ok"=>false, "error"=>$code, "message"=>$msg], JSON_UNESCAPED_UNICODE);
+    exit;
+  }
+}
+
+/* normalize role: กันเคส "super admin" -> "super_admin" */
+if (!function_exists('role_norm')) {
+  function role_norm($role_raw) {
+    return str_replace(' ', '_', strtolower($role_raw ?? 'user'));
+  }
 }
 
 if (!function_exists('require_login')) {
-    function require_login() {
-        if (empty($_SESSION['user_id'])) {
-            json_err("UNAUTHORIZED", "Please login first", 401);
-        }
+  function require_login() {
+    if (empty($_SESSION['user_id'])) {
+      json_err("UNAUTHORIZED", "Please login first", 401);
     }
+  }
+}
+
+/* ✅ เพิ่ม is_admin() เพื่อให้ไฟล์อื่นเรียกได้ */
+if (!function_exists('is_admin')) {
+  function is_admin(): bool {
+    $r = role_norm($_SESSION['role'] ?? 'user');
+    return in_array($r, ['admin', 'super_admin'], true);
+  }
 }
 
 if (!function_exists('require_admin')) {
-    function require_admin() {
-        require_login();
-        if (($_SESSION['role'] ?? '') !== 'admin' && ($_SESSION['role'] ?? '') !== 'super_admin') {
-            json_err("FORBIDDEN", "Admin access required", 403);
-        }
+  function require_admin() {
+    require_login();
+    if (!is_admin()) {
+      json_err("FORBIDDEN", "Admin access required", 403);
     }
+  }
 }
 
 /* alias ให้โค้ดเดิมที่อ้าง $dbh */

@@ -41,7 +41,11 @@ try {
   // ไม่ส่ง password_hash กลับ
   unset($u['password_hash']);
 
-  // ส่งข้อมูล user กลับ (ไม่มี token แล้ว)
+  // ✅ สร้าง token ไว้ให้ฝั่ง Flutter ใช้ (ยังไม่ผูกกับ DB)
+  // จะได้ data: { ..., "token": "...." }
+  $u['token'] = bin2hex(random_bytes(32));
+
+  // ส่งข้อมูล user กลับ
   // json_ok จะส่ง { "ok": true, "data": { ... } }
   json_ok($u);
 

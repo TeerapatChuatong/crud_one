@@ -1,15 +1,14 @@
 <?php
-require_once __DIR__ . '/../db.php';
-
-// ไม่ใช้ token / auth_sessions อีกต่อไป
-// ทำแค่เคลียร์ session ให้ผู้ใช้ล็อกเอาต์
+require_once __DIR__ . '/../db.php'; 
+// db.php ยังจำเป็น เพราะเราต้องใช้ json_ok / json_err และ CORS header ต่าง ๆ
 
 try {
-  // ล้างตัวแปรใน session
+  // ให้แน่ใจว่าเริ่ม session แล้วค่อยไปล้าง
   if (session_status() === PHP_SESSION_NONE) {
     session_start();
   }
 
+  // ล้างตัวแปรใน session
   $_SESSION = [];
 
   // ถ้ามี cookie session ให้ลบทิ้งด้วย (กันเหนียว)
@@ -29,8 +28,10 @@ try {
   // ทำลาย session
   session_destroy();
 
-  // ตอบกลับว่า logout แล้ว
-  json_ok(["message" => "logged_out"]);
+  // ✅ ตอบกลับว่า logout แล้ว (โครงสร้างเหมือน endpoint อื่น: { ok: true, data: {...} })
+  json_ok([
+    "message" => "logged_out"
+  ]);
 
 } catch (Throwable $e) {
   json_err("DB_ERROR", "db_error", 500);
