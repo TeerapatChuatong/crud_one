@@ -5,9 +5,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
   json_err("METHOD_NOT_ALLOWED","get_only",405);
 }
 
-$disease_id = $_GET['disease_id'] ?? '';
-$disease_id = trim($disease_id);
-
+$disease_id = trim($_GET['disease_id'] ?? '');
 if ($disease_id === '') {
   json_err("VALIDATION_ERROR","invalid_disease_id",400);
 }

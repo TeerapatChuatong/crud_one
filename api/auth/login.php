@@ -1,29 +1,39 @@
 <?php
 require_once __DIR__ . '/../db.php';
 
-$body     = json_decode(file_get_contents('php://input'), true) ?: [];
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+  json_err("METHOD_NOT_ALLOWED", "method_not_allowed", 405);
+}
+
+// รองรับทั้ง JSON และ form
+$raw  = file_get_contents('php://input');
+$body = json_decode($raw, true);
+if (!is_array($body) || empty($body)) {
+  $body = $_POST ?? [];
+}
+
 $account  = strtolower(trim($body['account'] ?? $body['email'] ?? ''));
 $password = (string)($body['password'] ?? '');
 
 if ($account === '' || $password === '') {
-  json_err("VALIDATION_ERROR","invalid_credential", 422);
+  json_err("VALIDATION_ERROR", "invalid_credential", 422);
 }
 
 try {
-  // มี username ไหม?
+  // มีคอลัมน์ username ไหม?
   $hasUsername = false;
   $col = $dbh->query("SHOW COLUMNS FROM `user` LIKE 'username'")->fetch();
   if ($col) $hasUsername = true;
 
-  // ดึงคอลัมน์ที่ต้องใช้
+  // เลือกฟิลด์
   $fields = "id, email, password_hash, role";
   if ($hasUsername) {
     $fields .= ", username";
   }
 
-  $where  = $hasUsername
-          ? "(username = :acc OR email = :acc)"
-          : "email = :acc";
+  $where = $hasUsername
+        ? "(username = :acc OR email = :acc)"
+        : "email = :acc";
 
   $sql = "SELECT $fields FROM `user` WHERE $where LIMIT 1";
   $stmt = $dbh->prepare($sql);
@@ -31,24 +41,25 @@ try {
   $u = $stmt->fetch(PDO::FETCH_ASSOC);
 
   if (!$u || !password_verify($password, $u['password_hash'])) {
-    json_err("BAD_CREDENTIALS","invalid_credential", 401);
+    json_err("BAD_CREDENTIALS", "invalid_credential", 401);
   }
 
-  // ===== session ฝั่ง PHP (ไว้ใช้กับเว็บเดิม) =====
+  // สร้าง session
   $_SESSION['user_id'] = (int)$u['id'];
   $_SESSION['role']    = $u['role'] ?? 'user';
 
   // ไม่ส่ง password_hash กลับ
   unset($u['password_hash']);
 
-  // ✅ สร้าง token ไว้ให้ฝั่ง Flutter ใช้ (ยังไม่ผูกกับ DB)
-  // จะได้ data: { ..., "token": "...." }
-  $u['token'] = bin2hex(random_bytes(32));
+  // ใช้ session_id() เป็น token (ให้ Flutter ใช้)
+  $token = session_id();
+  if ($token) {
+    $u['token'] = $token;
+  }
 
-  // ส่งข้อมูล user กลับ
-  // json_ok จะส่ง { "ok": true, "data": { ... } }
+  // { ok: true, data: { ... } }
   json_ok($u);
 
 } catch (Throwable $e) {
-  json_err("DB_ERROR","db_error", 500);
+  json_err("DB_ERROR", "db_error", 500);
 }

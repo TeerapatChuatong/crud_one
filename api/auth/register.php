@@ -1,9 +1,8 @@
 <?php
 require_once __DIR__ . '/../db.php';
 
-// ให้แน่ใจว่ามี session (เผื่อ db.php ยังไม่ได้เรียก)
-if (session_status() === PHP_SESSION_NONE) {
-  session_start();
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+  json_err("METHOD_NOT_ALLOWED", "method_not_allowed", 405);
 }
 
 /**
@@ -12,26 +11,27 @@ if (session_status() === PHP_SESSION_NONE) {
 $raw  = file_get_contents('php://input');
 $body = json_decode($raw, true);
 
-// ถ้า decode JSON ไม่ได้ หรือ body ว่าง -> ลองใช้ $_POST (กรณีส่งแบบ form-data / x-www-form-urlencoded)
 if (!is_array($body) || empty($body)) {
   $body = $_POST ?? [];
 }
 
-// ถ้า body เป็นรูปแบบ { "data": { ... } } หรือ { "user": { ... } } ให้ดึงชั้นในออกมา
+// ถ้า body เป็น { "data": {...} } หรือ { "user": {...} } → ดึงชั้นในมาใช้
 if (is_array($body) && count($body) === 1 && is_array(reset($body))) {
   $body = reset($body);
 }
 
 /**
- * helper ดึงค่าจากหลายชื่อ key
+ * helper ดึงค่าจากหลาย key
  */
-function pick_value(array $src, array $keys): string {
-  foreach ($keys as $k) {
-    if (isset($src[$k]) && $src[$k] !== null && $src[$k] !== '') {
-      return (string)$src[$k];
+if (!function_exists('pick_value')) {
+  function pick_value(array $src, array $keys): string {
+    foreach ($keys as $k) {
+      if (isset($src[$k]) && $src[$k] !== null && $src[$k] !== '') {
+        return (string)$src[$k];
+      }
     }
+    return '';
   }
-  return '';
 }
 
 // รองรับได้ทั้ง username / name / user
@@ -91,14 +91,13 @@ try {
 
   $uid = (int)$dbh->lastInsertId();
 
-  // auto login ฝั่ง session (ถ้าเว็บใช้)
+  // auto login ฝั่ง session
   $_SESSION['user_id'] = $uid;
   $_SESSION['role']    = 'user';
 
-  // ✅ สร้าง token ให้เหมือน login.php (ใช้ random string)
-  $token = bin2hex(random_bytes(32));
+  // ใช้ session_id() เป็น token
+  $token = session_id();
 
-  // ส่งผลลัพธ์กลับ (มี token ด้วย เพื่อให้ Flutter ใช้งานได้)
   json_ok([
     "id"       => $uid,
     "username" => $username,

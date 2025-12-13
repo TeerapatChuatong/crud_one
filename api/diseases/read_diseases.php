@@ -6,8 +6,8 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 }
 
 try {
-  $st = $dbh->query("SELECT * FROM diseases ORDER BY disease_id ASC");
-  json_ok($st->fetchAll());
+  $st = $dbh->query("SELECT * FROM diseases ORDER BY CAST(disease_id AS UNSIGNED) ASC");
+  json_ok($st->fetchAll(PDO::FETCH_ASSOC));
 } catch (Throwable $e) {
   json_err("DB_ERROR","db_error",500);
 }

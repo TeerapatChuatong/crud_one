@@ -1,17 +1,35 @@
 <?php
-require_once __DIR__ . '/../db.php'; 
-// db.php ยังจำเป็น เพราะเราต้องใช้ json_ok / json_err และ CORS header ต่าง ๆ
+// ดึง Authorization header (ถ้ามี) เพื่อใช้ token เป็น session_id
+$rawAuth = $_SERVER['HTTP_AUTHORIZATION'] ?? ($_SERVER['Authorization'] ?? '');
+
+if (!$rawAuth && function_exists('apache_request_headers')) {
+  $headers = apache_request_headers();
+  if (isset($headers['Authorization'])) {
+    $rawAuth = $headers['Authorization'];
+  }
+}
+
+$token = null;
+if ($rawAuth && preg_match('/Bearer\s+(\S+)/i', $rawAuth, $m)) {
+  $token = $m[1];
+}
+
+if ($token && session_status() === PHP_SESSION_NONE) {
+  $token = substr($token, 0, 128);
+  session_id($token);
+}
+
+require_once __DIR__ . '/../db.php';
 
 try {
-  // ให้แน่ใจว่าเริ่ม session แล้วค่อยไปล้าง
+  // ล้างตัวแปรใน session
   if (session_status() === PHP_SESSION_NONE) {
     session_start();
   }
 
-  // ล้างตัวแปรใน session
   $_SESSION = [];
 
-  // ถ้ามี cookie session ให้ลบทิ้งด้วย (กันเหนียว)
+  // ถ้ามี cookie session ให้ลบทิ้งด้วย
   if (ini_get("session.use_cookies")) {
     $params = session_get_cookie_params();
     setcookie(
@@ -28,10 +46,7 @@ try {
   // ทำลาย session
   session_destroy();
 
-  // ✅ ตอบกลับว่า logout แล้ว (โครงสร้างเหมือน endpoint อื่น: { ok: true, data: {...} })
-  json_ok([
-    "message" => "logged_out"
-  ]);
+  json_ok(["message" => "logged_out"]);
 
 } catch (Throwable $e) {
   json_err("DB_ERROR", "db_error", 500);

@@ -1,82 +1,99 @@
 <?php
-require_once __DIR__ . '/../db.php';
-require_login();
+require_once __DIR__ . '/../auth/require_auth.php';
 
-if ($_SERVER['REQUEST_METHOD'] !== 'PATCH') {
-  json_err("METHOD_NOT_ALLOWED","patch_only",405);
-}
-
-$body = json_decode(file_get_contents("php://input"), true) ?: [];
-$log_id = $body['log_id'] ?? null;
-
-if (!$log_id || !ctype_digit((string)$log_id)) {
-  json_err("VALIDATION_ERROR","invalid_log_id",400);
+if (!in_array($_SERVER['REQUEST_METHOD'], ['POST', 'PATCH'], true)) {
+    json_err("METHOD_NOT_ALLOWED", "post_or_patch_only", 405);
 }
 
-$fields = [];
-$params = [];
-$allowed_types = ['fertilizer','pesticide','watering','pruning','other'];
-
-if (array_key_exists('user_id',$body)) {
-  $user_id = trim($body['user_id'] ?? '');
-  if ($user_id === '') json_err("VALIDATION_ERROR","user_id_required",400);
-  $fields[] = "user_id=?";
-  $params[] = $user_id;
-}
-if (array_key_exists('tree_id',$body)) {
-  $tree_id = trim($body['tree_id'] ?? '');
-  if ($tree_id === '') json_err("VALIDATION_ERROR","tree_id_required",400);
-  $fields[] = "tree_id=?";
-  $params[] = $tree_id;
-}
-if (array_key_exists('care_type',$body)) {
-  $care_type = trim($body['care_type'] ?? '');
-  if (!in_array($care_type,$allowed_types,true)) {
-    json_err("VALIDATION_ERROR","invalid_care_type",400);
-  }
-  $fields[] = "care_type=?";
-  $params[] = $care_type;
-}
-if (array_key_exists('care_date',$body)) {
-  $care_date = trim($body['care_date'] ?? '');
-  if ($care_date === '') json_err("VALIDATION_ERROR","care_date_required",400);
-  $fields[] = "care_date=?";
-  $params[] = $care_date;
-}
-if (array_key_exists('product_name',$body)) {
-  $fields[] = "product_name=?";
-  $params[] = trim($body['product_name'] ?? '') ?: null;
-}
-if (array_key_exists('amount',$body)) {
-  $amount = $body['amount'];
-  if ($amount !== null && $amount !== '' && !is_numeric($amount)) {
-    json_err("VALIDATION_ERROR","invalid_amount",400);
-  }
-  $fields[] = "amount=?";
-  $params[] = ($amount === '' ? null : $amount);
-}
-if (array_key_exists('unit',$body)) {
-  $fields[] = "unit=?";
-  $params[] = trim($body['unit'] ?? '') ?: null;
-}
-if (array_key_exists('area',$body)) {
-  $fields[] = "area=?";
-  $params[] = trim($body['area'] ?? '') ?: null;
-}
-if (array_key_exists('note',$body)) {
-  $fields[] = "note=?";
-  $params[] = trim($body['note'] ?? '') ?: null;
+$body = json_decode(file_get_contents('php://input'), true);
+if (!is_array($body) || empty($body)) {
+    $body = $_POST ?? [];
 }
 
-if (!$fields) json_err("VALIDATION_ERROR","nothing_to_update",400);
-
-$params[] = (int)$log_id;
+$log_id = isset($body['log_id']) ? (int)$body['log_id'] : 0;
+if ($log_id <= 0) {
+    json_err("VALIDATION_ERROR", "invalid_log_id", 422);
+}
 
 try {
-  $sql = "UPDATE care_logs SET ".implode(',', $fields)." WHERE log_id=?";
-  $st  = $dbh->prepare($sql);
-  $st->execute($params);
-  json_ok(true);
+    $userId  = (int)$AUTH_USER_ID;
+    $isAdmin = in_array($AUTH_USER_ROLE, ['admin', 'super_admin'], true);
+
+    // ตรวจ owner ก่อน
+    $chk = $dbh->prepare("SELECT user_id FROM care_logs WHERE log_id = ?");
+    $chk->execute([$log_id]);
+    $row = $chk->fetch();
+
+    if (!$row) {
+        json_err("NOT_FOUND", "log_not_found", 404);
+    }
+
+    if (!$isAdmin && (int)$row['user_id'] !== $userId) {
+        json_err("FORBIDDEN", "not_owner", 403);
+    }
+
+    // เตรียมฟิลด์อัปเดต
+    $fields = [];
+    $params = [];
+
+    if (array_key_exists('tree_id', $body) && is_numeric($body['tree_id'])) {
+        $fields[] = "tree_id = ?";
+        $params[] = (int)$body['tree_id'];
+    }
+
+    if (array_key_exists('care_type', $body)) {
+        $fields[] = "care_type = ?";
+        $params[] = trim((string)$body['care_type']);
+    }
+
+    if (array_key_exists('care_date', $body)) {
+        $fields[] = "care_date = ?";
+        $params[] = trim((string)$body['care_date']);
+    }
+
+    if (array_key_exists('product_name', $body)) {
+        $fields[] = "product_name = ?";
+        $params[] = $body['product_name'] !== '' ? (string)$body['product_name'] : null;
+    }
+
+    if (array_key_exists('amount', $body)) {
+        $fields[] = "amount = ?";
+        $params[] = $body['amount'] !== '' ? $body['amount'] : null;
+    }
+
+    if (array_key_exists('unit', $body)) {
+        $fields[] = "unit = ?";
+        $params[] = $body['unit'] !== '' ? (string)$body['unit'] : null;
+    }
+
+    if (array_key_exists('area', $body)) {
+        $fields[] = "area = ?";
+        $params[] = $body['area'] !== '' ? (string)$body['area'] : null;
+    }
+
+    if (array_key_exists('note', $body)) {
+        $fields[] = "note = ?";
+        $params[] = $body['note'] !== '' ? (string)$body['note'] : null;
+    }
+
+    if (empty($fields)) {
+        json_ok([
+            "log_id"  => $log_id,
+            "message" => "no_change",
+        ]);
+    }
+
+    $params[] = $log_id;
+
+    $sql = "UPDATE care_logs SET " . implode(', ', $fields) . " WHERE log_id = ?";
+    $stmt = $dbh->prepare($sql);
+    $stmt->execute($params);
+
+    json_ok([
+        "log_id"  => $log_id,
+        "message" => "updated",
+    ]);
+
 } catch (Throwable $e) {
-  json_err("DB_ERROR","db_error",500);
+    json_err("DB_ERROR", "db_error", 500);
 }

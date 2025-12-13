@@ -12,6 +12,24 @@ $body = json_decode(file_get_contents("php://input"), true) ?: [];
 $disease_th = trim($body['name_th'] ?? $body['disease_th'] ?? '');
 $disease_en = trim($body['name_en'] ?? $body['disease_en'] ?? '');
 
+// ฟิลด์ใหม่ (desc รวมเข้ามา + รูป 1 รูป)
+$description = $body['description'] ?? null;
+$causes      = $body['causes'] ?? null;
+$symptoms    = $body['symptoms'] ?? null;
+$image_url   = $body['image_url'] ?? null;
+
+$normNullableText = function ($v) {
+  if ($v === null) return null;
+  if (!is_string($v)) $v = (string)$v;
+  $v = trim($v);
+  return $v === '' ? null : $v;
+};
+
+$description = $normNullableText($description);
+$causes      = $normNullableText($causes);
+$symptoms    = $normNullableText($symptoms);
+$image_url   = $normNullableText($image_url);
+
 if ($disease_th === '') {
   json_err("VALIDATION_ERROR", "disease_th_required", 400);
 }
@@ -22,32 +40,37 @@ try {
   $maxId = $st->fetchColumn();
 
   // 2) ถ้ายังไม่มีข้อมูลเลย → เริ่มจาก 1, ถ้ามีแล้ว → +1
-  if ($maxId === null || $maxId === false) {
-    $nextId = 1;
-  } else {
-    $nextId = (int)$maxId + 1;
-  }
+  $nextId = ($maxId === null || $maxId === false) ? 1 : ((int)$maxId + 1);
 
-  // 3) แปลงเป็น string เพื่อเก็บใน disease_id (จะได้ "1", "2", "3", ...)
+  // 3) เก็บเป็น string ("1","2","3",...)
   $disease_id = (string)$nextId;
 
-  // 4) INSERT ลงตาราง
+  $final_en = ($disease_en !== '' ? $disease_en : $disease_th);
+
+  // 4) INSERT ลงตาราง diseases (รวม desc + image_url แล้ว)
   $st = $dbh->prepare("
-    INSERT INTO diseases (disease_id, disease_th, disease_en)
-    VALUES (?, ?, ?)
+    INSERT INTO diseases (disease_id, disease_th, disease_en, description, causes, symptoms, image_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   ");
   $st->execute([
     $disease_id,
     $disease_th,
-    $disease_en !== '' ? $disease_en : $disease_th,
+    $final_en,
+    $description,
+    $causes,
+    $symptoms,
+    $image_url,
   ]);
 
   json_ok([
     "disease_id"  => $disease_id,
     "disease_th"  => $disease_th,
-    "disease_en"  => $disease_en !== '' ? $disease_en : $disease_th,
+    "disease_en"  => $final_en,
+    "description" => $description,
+    "causes"      => $causes,
+    "symptoms"    => $symptoms,
+    "image_url"   => $image_url,
   ]);
 } catch (Throwable $e) {
-  // ถ้าอยากเห็น error detail ตอน dev ปรับเป็น $e->getMessage() ได้
   json_err("DB_ERROR", "db_error", 500);
 }

@@ -1,61 +1,57 @@
 <?php
-// api/care_logs/search_care_logs.php
-require_once __DIR__ . '/../db.php';
-require_login();
+require_once __DIR__ . '/../auth/require_auth.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
-  json_err("METHOD_NOT_ALLOWED", "get_only", 405);
+    json_err("METHOD_NOT_ALLOWED", "get_only", 405);
 }
 
-$current  = (string)($_SESSION['user_id'] ?? '');
-$is_admin = is_admin();
-
-$q        = trim($_GET['q'] ?? '');
-$tree_id  = trim($_GET['tree_id'] ?? '');
-$user_id  = trim($_GET['user_id'] ?? '');
-$care_type = trim($_GET['care_type'] ?? '');
-
 try {
-  $sql    = "SELECT * FROM care_logs";
-  $where  = [];
-  $params = [];
+    $userId  = (int)$AUTH_USER_ID;
+    $isAdmin = in_array($AUTH_USER_ROLE, ['admin', 'super_admin'], true);
 
-  if ($is_admin && $user_id !== '') {
-    $where[]  = "user_id = ?";
-    $params[] = $user_id;
-  } else {
-    $where[]  = "user_id = ?";
-    $params[] = $current;
-  }
+    $q       = trim((string)($_GET['q'] ?? ''));
+    $where   = [];
+    $params  = [];
 
-  if ($tree_id !== '') {
-    $where[]  = "tree_id = ?";
-    $params[] = $tree_id;
-  }
+    if (!$isAdmin) {
+        $where[]  = "user_id = ?";
+        $params[] = $userId;
+    }
 
-  if ($care_type !== '') {
-    $where[]  = "care_type = ?";
-    $params[] = $care_type;
-  }
+    if ($q !== '') {
+        $where[] = "(product_name LIKE ? OR note LIKE ?)";
+        $like    = "%{$q}%";
+        $params[] = $like;
+        $params[] = $like;
+    }
 
-  if ($q !== '') {
-    $like    = "%{$q}%";
-    $where[] = "(product_name LIKE ? OR area LIKE ? OR note LIKE ?)";
-    $params[] = $like;
-    $params[] = $like;
-    $params[] = $like;
-  }
+    if (isset($_GET['tree_id']) && is_numeric($_GET['tree_id'])) {
+        $where[]  = "tree_id = ?";
+        $params[] = (int)$_GET['tree_id'];
+    }
 
-  if ($where) {
-    $sql .= " WHERE " . implode(" AND ", $where);
-  }
+    if (!empty($_GET['care_type'])) {
+        $where[]  = "care_type = ?";
+        $params[] = (string)$_GET['care_type'];
+    }
 
-  $sql .= " ORDER BY care_date DESC, log_id DESC";
+    $sql = "SELECT
+              log_id, user_id, tree_id, care_type, care_date,
+              product_name, amount, unit, area, note, created_at
+            FROM care_logs";
 
-  $st = $dbh->prepare($sql);
-  $st->execute($params);
+    if ($where) {
+        $sql .= " WHERE " . implode(' AND ', $where);
+    }
 
-  json_ok($st->fetchAll(PDO::FETCH_ASSOC));
+    $sql .= " ORDER BY care_date DESC, log_id DESC";
+
+    $stmt = $dbh->prepare($sql);
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll();
+
+    json_ok($rows);
+
 } catch (Throwable $e) {
-  json_err("DB_ERROR", "db_error", 500);
+    json_err("DB_ERROR", "db_error", 500);
 }

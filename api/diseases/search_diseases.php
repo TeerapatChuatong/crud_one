@@ -13,12 +13,16 @@ try {
     $st = $dbh->prepare("
       SELECT *
       FROM diseases
-      WHERE disease_th LIKE ? OR disease_en LIKE ?
-      ORDER BY disease_id ASC
+      WHERE disease_th LIKE ?
+         OR disease_en LIKE ?
+         OR description LIKE ?
+         OR causes LIKE ?
+         OR symptoms LIKE ?
+      ORDER BY CAST(disease_id AS UNSIGNED) ASC
     ");
-    $st->execute([$like, $like]);
+    $st->execute([$like, $like, $like, $like, $like]);
   } else {
-    $st = $dbh->query("SELECT * FROM diseases ORDER BY disease_id ASC");
+    $st = $dbh->query("SELECT * FROM diseases ORDER BY CAST(disease_id AS UNSIGNED) ASC");
   }
 
   json_ok($st->fetchAll(PDO::FETCH_ASSOC));

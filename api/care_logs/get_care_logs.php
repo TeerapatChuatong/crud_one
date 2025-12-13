@@ -1,7 +1,7 @@
 <?php
 require_once __DIR__ . '/../db.php';
 
-// ✅ เรียก require_auth.php และรับข้อมูล user
+// เรียก require_auth.php และรับข้อมูล user
 $authUser = require __DIR__ . '/../auth/require_auth.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
@@ -9,51 +9,39 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 }
 
 try {
-    // ✅ ดึงข้อมูล user จาก $authUser
     $userId  = (int)$authUser['id'];
     $isAdmin = in_array($authUser['role'] ?? 'user', ['admin', 'super_admin'], true);
-
-    // ✅ Debug
-    error_log("=== GET CARE LOGS ===");
-    error_log("User ID: $userId");
-    error_log("Is Admin: " . ($isAdmin ? 'Yes' : 'No'));
 
     $where  = [];
     $params = [];
 
-    // ✅ ถ้าไม่ใช่ admin ให้เห็นเฉพาะข้อมูลของตัวเอง
+    // ถ้าไม่ใช่ admin ให้เห็นเฉพาะข้อมูลของตัวเอง
     if (!$isAdmin) {
         $where[]  = "user_id = ?";
         $params[] = $userId;
-        error_log("Filter: Only user's own logs");
     }
 
-    // filter เพิ่ม: tree_id, care_type, date range ฯลฯ
+    // filter: tree_id, care_type, date range
     if (isset($_GET['tree_id']) && is_numeric($_GET['tree_id'])) {
         $where[]  = "tree_id = ?";
         $params[] = (int)$_GET['tree_id'];
-        error_log("Filter: tree_id = " . $_GET['tree_id']);
     }
 
     if (!empty($_GET['care_type'])) {
         $where[]  = "care_type = ?";
         $params[] = (string)$_GET['care_type'];
-        error_log("Filter: care_type = " . $_GET['care_type']);
     }
 
     if (!empty($_GET['from_date'])) {
         $where[]  = "care_date >= ?";
         $params[] = (string)$_GET['from_date'];
-        error_log("Filter: from_date = " . $_GET['from_date']);
     }
 
     if (!empty($_GET['to_date'])) {
         $where[]  = "care_date <= ?";
         $params[] = (string)$_GET['to_date'];
-        error_log("Filter: to_date = " . $_GET['to_date']);
     }
 
-    // ✅ เพิ่ม is_reminder และ is_done ใน SELECT
     $sql = "SELECT
               log_id, user_id, tree_id, care_type, care_date,
               is_reminder, is_done,
@@ -66,21 +54,14 @@ try {
 
     $sql .= " ORDER BY care_date DESC, log_id DESC";
 
-    error_log("SQL: $sql");
-    error_log("Params: " . print_r($params, true));
-
     $stmt = $dbh->prepare($sql);
     $stmt->execute($params);
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    error_log("Found " . count($rows) . " records");
-    error_log("=====================\n");
-
+    // ✅ ส่งเป็น ok แทน status
     json_ok($rows);
 
 } catch (Throwable $e) {
-    error_log("❌ GET_CARE_LOGS ERROR: " . $e->getMessage());
-    error_log("Stack trace: " . $e->getTraceAsString());
-    error_log("=====================\n");
+    error_log("get_care_logs error: " . $e->getMessage());
     json_err("DB_ERROR", "db_error: " . $e->getMessage(), 500);
 }
