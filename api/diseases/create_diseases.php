@@ -12,10 +12,10 @@ $body = json_decode(file_get_contents("php://input"), true) ?: [];
 $disease_th = trim($body['name_th'] ?? $body['disease_th'] ?? '');
 $disease_en = trim($body['name_en'] ?? $body['disease_en'] ?? '');
 
-// ฟิลด์ใหม่ (desc รวมเข้ามา + รูป 1 รูป)
+// ฟิลด์ใหม่ (แก้ symptoms -> symptom ตาม DB)
 $description = $body['description'] ?? null;
 $causes      = $body['causes'] ?? null;
-$symptoms    = $body['symptoms'] ?? null;
+$symptom     = $body['symptom'] ?? $body['symptoms'] ?? null; // รองรับทั้ง 2 แบบ
 $image_url   = $body['image_url'] ?? null;
 
 $normNullableText = function ($v) {
@@ -27,7 +27,7 @@ $normNullableText = function ($v) {
 
 $description = $normNullableText($description);
 $causes      = $normNullableText($causes);
-$symptoms    = $normNullableText($symptoms);
+$symptom     = $normNullableText($symptom);
 $image_url   = $normNullableText($image_url);
 
 if ($disease_th === '') {
@@ -47,9 +47,9 @@ try {
 
   $final_en = ($disease_en !== '' ? $disease_en : $disease_th);
 
-  // 4) INSERT ลงตาราง diseases (รวม desc + image_url แล้ว)
+  // 4) INSERT ลงตาราง diseases (แก้ symptoms -> symptom)
   $st = $dbh->prepare("
-    INSERT INTO diseases (disease_id, disease_th, disease_en, description, causes, symptoms, image_url)
+    INSERT INTO diseases (disease_id, disease_th, disease_en, description, causes, symptom, image_url)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   ");
   $st->execute([
@@ -58,7 +58,7 @@ try {
     $final_en,
     $description,
     $causes,
-    $symptoms,
+    $symptom,
     $image_url,
   ]);
 
@@ -68,7 +68,7 @@ try {
     "disease_en"  => $final_en,
     "description" => $description,
     "causes"      => $causes,
-    "symptoms"    => $symptoms,
+    "symptom"     => $symptom,
     "image_url"   => $image_url,
   ]);
 } catch (Throwable $e) {

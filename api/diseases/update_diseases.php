@@ -31,6 +31,17 @@ if ($disease_id === '') {
   json_err("VALIDATION_ERROR", "invalid_disease_id", 400);
 }
 
+// ตรวจสอบว่า disease_id มีอยู่จริง
+try {
+  $check = $dbh->prepare("SELECT disease_id FROM diseases WHERE disease_id = ?");
+  $check->execute([$disease_id]);
+  if (!$check->fetch()) {
+    json_err("NOT_FOUND", "disease_not_found", 404);
+  }
+} catch (Throwable $e) {
+  json_err("DB_ERROR", "db_error", 500);
+}
+
 $normNullableText = function ($v) {
   if ($v === null) return null;
   if (!is_string($v)) $v = (string)$v;
@@ -118,9 +129,11 @@ if (array_key_exists('causes', $body)) {
   $params[] = $normNullableText($body['causes']);
 }
 
-if (array_key_exists('symptoms', $body)) {
-  $fields[] = "symptoms = ?";
-  $params[] = $normNullableText($body['symptoms']);
+// รองรับทั้ง symptom และ symptoms (แก้ตาม DB)
+if (array_key_exists('symptom', $body) || array_key_exists('symptoms', $body)) {
+  $fields[] = "symptom = ?";
+  $symptom_value = $body['symptom'] ?? $body['symptoms'] ?? null;
+  $params[] = $normNullableText($symptom_value);
 }
 
 if (array_key_exists('image_url', $body)) {
@@ -139,7 +152,7 @@ try {
   $st  = $dbh->prepare($sql);
   $st->execute($params);
 
-  // ส่งค่ากลับ (ถ้าจะใช้)
+  // ส่งค่ากลับ
   $q = $dbh->prepare("SELECT * FROM diseases WHERE disease_id = ? LIMIT 1");
   $q->execute([$disease_id]);
   $row = $q->fetch(PDO::FETCH_ASSOC);

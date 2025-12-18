@@ -1,52 +1,36 @@
 <?php
 require_once __DIR__ . '/../db.php';
 
-if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
-  json_err("METHOD_NOT_ALLOWED","get_only",405);
-}
-
-$score_id   = $_GET['score_id']   ?? null;
-$disease_id = $_GET['disease_id'] ?? null;
-$question_id = $_GET['question_id'] ?? null;
-
 try {
-  if ($score_id !== null && $score_id !== '') {
-    if (!ctype_digit((string)$score_id)) {
-      json_err("VALIDATION_ERROR","invalid_score_id",400);
-    }
-    $st = $dbh->prepare("SELECT * FROM scores WHERE score_id=?");
-    $st->execute([(int)$score_id]);
-    $row = $st->fetch();
-    if (!$row) json_err("NOT_FOUND","not_found",404);
-    json_ok($row);
-  } else {
-    $where = [];
-    $params = [];
-    if ($disease_id !== null && $disease_id !== '') {
-      if (!ctype_digit((string)$disease_id)) {
-        json_err("VALIDATION_ERROR","invalid_disease_id",400);
-      }
-      $where[] = "disease_id=?";
-      $params[] = (int)$disease_id;
-    }
-    if ($question_id !== null && $question_id !== '') {
-      if (!ctype_digit((string)$question_id)) {
-        json_err("VALIDATION_ERROR","invalid_question_id",400);
-      }
-      $where[] = "question_id=?";
-      $params[] = (int)$question_id;
-    }
+  require_admin();
 
-    $sql = "SELECT * FROM scores";
-    if ($where) {
-      $sql .= " WHERE ".implode(" AND ",$where);
-    }
-    $sql .= " ORDER BY score_id ASC";
+  $dq = $_GET['disease_question_id'] ?? null;
 
-    $st = $dbh->prepare($sql);
-    $st->execute($params);
-    json_ok($st->fetchAll());
+  // backward compatible: disease_id + question_id -> หา disease_question_id
+  if (($dq === null || $dq === '') && isset($_GET['disease_id'], $_GET['question_id'])) {
+    $disease_id = $_GET['disease_id'];
+    $question_id = $_GET['question_id'];
+    if (!ctype_digit((string)$disease_id) || !ctype_digit((string)$question_id)) {
+      json_err('VALIDATION_ERROR', 'invalid_input', 400);
+    }
+    $q = $pdo->prepare("SELECT disease_question_id FROM disease_questions WHERE disease_id=? AND question_id=? LIMIT 1");
+    $q->execute([(int)$disease_id, (int)$question_id]);
+    $row = $q->fetch();
+    $dq = $row ? (int)$row['disease_question_id'] : 0;
   }
+
+  if (!ctype_digit((string)$dq)) {
+    json_err('VALIDATION_ERROR', 'invalid_disease_question_id', 400);
+  }
+
+  $stmt = $pdo->prepare("
+    SELECT score_id, disease_question_id, choice_id, score_value
+    FROM scores
+    WHERE disease_question_id=?
+  ");
+  $stmt->execute([(int)$dq]);
+
+  json_ok($stmt->fetchAll());
 } catch (Throwable $e) {
-  json_err("DB_ERROR","db_error",500);
+  json_err('DB_ERROR', 'db_error', 500);
 }

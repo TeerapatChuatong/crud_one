@@ -1,49 +1,55 @@
 <?php
 require_once __DIR__ . '/../db.php';
+require_admin();
 
-if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
-  json_err("METHOD_NOT_ALLOWED","get_only",405);
+if ($_SERVER['REQUEST_METHOD'] !== 'GET') json_err("METHOD_NOT_ALLOWED", "get_only", 405);
+
+$disease_id = trim($_GET['disease_id'] ?? '');
+$level_code = strtolower(trim($_GET['level_code'] ?? ''));
+$q          = trim($_GET['q'] ?? '');
+
+$allowedLevels = ['low','medium','high'];
+$where = [];
+$params = [];
+
+if ($disease_id !== '') {
+  if (!ctype_digit((string)$disease_id)) json_err("VALIDATION_ERROR", "invalid_disease_id", 400);
+  $where[] = "rl.disease_id = ?";
+  $params[] = (int)$disease_id;
+}
+if ($level_code !== '') {
+  if (!in_array($level_code, $allowedLevels, true)) json_err("VALIDATION_ERROR", "invalid_level_code", 400);
+  $where[] = "rl.level_code = ?";
+  $params[] = $level_code;
+}
+if ($q !== '') {
+  $where[] = "t.advice_text LIKE ?";
+  $params[] = "%{$q}%";
 }
 
-$treatment_id  = $_GET['treatment_id']  ?? null;
-$disease_id    = $_GET['disease_id']    ?? null;
-$risk_level_id = $_GET['risk_level_id'] ?? null;
+$sql = "
+  SELECT
+    t.treatment_id, t.risk_level_id, t.advice_text, t.created_at,
+    rl.disease_id, rl.level_code, rl.min_score, rl.days, rl.times,
+    d.disease_th, d.disease_en
+  FROM treatments t
+  JOIN disease_risk_levels rl ON rl.risk_level_id = t.risk_level_id
+  JOIN diseases d ON d.disease_id = rl.disease_id
+";
+
+if ($where) $sql .= " WHERE " . implode(" AND ", $where);
+
+$sql .= "
+  ORDER BY
+    rl.disease_id ASC,
+    FIELD(rl.level_code,'low','medium','high') ASC,
+    t.treatment_id DESC
+";
 
 try {
-  if ($treatment_id !== null && $treatment_id !== '') {
-    if (!ctype_digit((string)$treatment_id)) {
-      json_err("VALIDATION_ERROR","invalid_treatment_id",400);
-    }
-    $st = $dbh->prepare("SELECT * FROM treatments WHERE treatment_id=?");
-    $st->execute([(int)$treatment_id]);
-    $row = $st->fetch();
-    if (!$row) json_err("NOT_FOUND","not_found",404);
-    json_ok($row);
-  } else {
-    $where = [];
-    $params = [];
-
-    if ($disease_id !== null && $disease_id !== '') {
-      if (!ctype_digit((string)$disease_id)) json_err("VALIDATION_ERROR","invalid_disease_id",400);
-      $where[] = "disease_id=?";
-      $params[] = (int)$disease_id;
-    }
-    if ($risk_level_id !== null && $risk_level_id !== '') {
-      if (!ctype_digit((string)$risk_level_id)) json_err("VALIDATION_ERROR","invalid_risk_level_id",400);
-      $where[] = "risk_level_id=?";
-      $params[] = (int)$risk_level_id;
-    }
-
-    $sql = "SELECT * FROM treatments";
-    if ($where) {
-      $sql .= " WHERE ".implode(" AND ",$where);
-    }
-    $sql .= " ORDER BY treatment_id ASC";
-
-    $st = $dbh->prepare($sql);
-    $st->execute($params);
-    json_ok($st->fetchAll());
-  }
+  $st = $dbh->prepare($sql);
+  $st->execute($params);
+  json_ok($st->fetchAll(PDO::FETCH_ASSOC));
 } catch (Throwable $e) {
-  json_err("DB_ERROR","db_error",500);
+  json_err("DB_ERROR", "db_error", 500);
 }

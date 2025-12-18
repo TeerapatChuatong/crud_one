@@ -18,7 +18,6 @@ if ($origin && in_array($origin, $allowed, true)) {
   header("Vary: Origin");
   header("Access-Control-Allow-Credentials: true");
 } else if ($origin) {
-  // origin แปลก → บล็อกชัดเจน (กันสับสนจาก * + credentials)
   header("Access-Control-Allow-Origin: null");
   header("Vary: Origin");
   http_response_code(403);
@@ -63,10 +62,28 @@ $is_https = (
 session_set_cookie_params([
   'lifetime' => 60*60*24*7,
   'path'     => '/',
-  'secure'   => $is_https,           // true เมื่อผ่าน HTTPS (เช่น ngrok)
+  'secure'   => $is_https,
   'httponly' => true,
   'samesite' => $is_https ? 'None' : 'Lax',
 ]);
+
+// ✅ NEW: รองรับ Authorization: Bearer <token> ให้ใช้เป็น session_id ได้
+function _bearer_token() {
+  $raw = $_SERVER['HTTP_AUTHORIZATION'] ?? ($_SERVER['Authorization'] ?? '');
+  if (!$raw && function_exists('apache_request_headers')) {
+    $h = apache_request_headers();
+    if (isset($h['Authorization'])) $raw = $h['Authorization'];
+  }
+  if ($raw && preg_match('/Bearer\s+(\S+)/i', $raw, $m)) return $m[1];
+  return null;
+}
+
+$token = _bearer_token();
+if ($token) {
+  $token = substr($token, 0, 128);
+  if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+  session_id($token);
+}
 
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -86,7 +103,6 @@ if (!function_exists('json_err')) {
   }
 }
 
-/* normalize role: กันเคส "super admin" -> "super_admin" */
 if (!function_exists('role_norm')) {
   function role_norm($role_raw) {
     return str_replace(' ', '_', strtolower($role_raw ?? 'user'));
@@ -101,7 +117,6 @@ if (!function_exists('require_login')) {
   }
 }
 
-/* ✅ เพิ่ม is_admin() เพื่อให้ไฟล์อื่นเรียกได้ */
 if (!function_exists('is_admin')) {
   function is_admin(): bool {
     $r = role_norm($_SESSION['role'] ?? 'user');
@@ -118,5 +133,4 @@ if (!function_exists('require_admin')) {
   }
 }
 
-/* alias ให้โค้ดเดิมที่อ้าง $dbh */
 if (!isset($dbh)) $dbh = $pdo;

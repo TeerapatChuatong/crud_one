@@ -5,12 +5,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
   json_err("METHOD_NOT_ALLOWED", "method_not_allowed", 405);
 }
 
-// รองรับทั้ง JSON และ form
 $raw  = file_get_contents('php://input');
 $body = json_decode($raw, true);
-if (!is_array($body) || empty($body)) {
-  $body = $_POST ?? [];
-}
+if (!is_array($body) || empty($body)) $body = $_POST ?? [];
 
 $account  = strtolower(trim($body['account'] ?? $body['email'] ?? ''));
 $password = (string)($body['password'] ?? '');
@@ -20,23 +17,12 @@ if ($account === '' || $password === '') {
 }
 
 try {
-  // มีคอลัมน์ username ไหม?
-  $hasUsername = false;
-  $col = $dbh->query("SHOW COLUMNS FROM `user` LIKE 'username'")->fetch();
-  if ($col) $hasUsername = true;
-
-  // เลือกฟิลด์
-  $fields = "id, email, password_hash, role";
-  if ($hasUsername) {
-    $fields .= ", username";
-  }
-
-  $where = $hasUsername
-        ? "(username = :acc OR email = :acc)"
-        : "email = :acc";
-
-  $sql = "SELECT $fields FROM `user` WHERE $where LIMIT 1";
-  $stmt = $dbh->prepare($sql);
+  $stmt = $dbh->prepare("
+    SELECT user_id, username, email, password_hash, role
+    FROM `user`
+    WHERE (LOWER(username) = :acc OR LOWER(email) = :acc)
+    LIMIT 1
+  ");
   $stmt->execute([':acc' => $account]);
   $u = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -44,20 +30,19 @@ try {
     json_err("BAD_CREDENTIALS", "invalid_credential", 401);
   }
 
-  // สร้าง session
-  $_SESSION['user_id'] = (int)$u['id'];
-  $_SESSION['role']    = $u['role'] ?? 'user';
+  $_SESSION['user_id']  = (int)$u['user_id'];
+  $_SESSION['role']     = (string)$u['role'];
+  $_SESSION['username'] = (string)$u['username'];
+  $_SESSION['email']    = (string)$u['email'];
 
-  // ไม่ส่ง password_hash กลับ
   unset($u['password_hash']);
 
-  // ใช้ session_id() เป็น token (ให้ Flutter ใช้)
-  $token = session_id();
-  if ($token) {
-    $u['token'] = $token;
-  }
+  $u['id'] = (int)$u['user_id']; // ✅ เผื่อ frontend ใช้ key id
+  unset($u['user_id']);
 
-  // { ok: true, data: { ... } }
+  $token = session_id();
+  if ($token) $u['token'] = $token;
+
   json_ok($u);
 
 } catch (Throwable $e) {

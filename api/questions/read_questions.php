@@ -2,59 +2,40 @@
 require_once __DIR__ . '/../db.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
-  json_err("METHOD_NOT_ALLOWED", "get_only", 405);
+  json_err("METHOD_NOT_ALLOWED","get_only",405);
 }
 
-$id = $_GET['question_id'] ?? null;
-
 try {
-  if ($id !== null && $id !== '') {
-    // ----- อ่านคำถามเดียวตาม question_id -----
-    if (!ctype_digit((string)$id)) {
-      json_err("VALIDATION_ERROR", "invalid_question_id", 400);
-    }
+  require_admin(); // ✅ ถ้าเป็น endpoint สำหรับแอดมิน
 
-    $sql = "
-      SELECT
-        q.*,
-        (
-          SELECT GROUP_CONCAT(dq.disease_id ORDER BY dq.disease_id SEPARATOR ',')
-          FROM disease_questions dq
-          WHERE dq.question_id = q.question_id
-        ) AS disease_ids
-      FROM questions q
-      WHERE q.question_id = ?
-      LIMIT 1
-    ";
+  $sql = "
+    SELECT
+      q.question_id AS id,
+      q.question_id,
+      q.question_text,
+      q.question_type,
+      q.sort_order,
+      dq.disease_question_id,
+      dq.disease_id,
+      d.disease_th AS disease_name
+    FROM questions q
+    LEFT JOIN (
+      SELECT dq1.*
+      FROM disease_questions dq1
+      JOIN (
+        SELECT question_id, MIN(disease_question_id) AS min_id
+        FROM disease_questions
+        GROUP BY question_id
+      ) m ON m.min_id = dq1.disease_question_id
+    ) dq ON dq.question_id = q.question_id
+    LEFT JOIN diseases d ON d.disease_id = dq.disease_id
+    ORDER BY q.question_id ASC
+  ";
 
-    $st = $dbh->prepare($sql);
-    $st->execute([(int)$id]);
-    $row = $st->fetch(PDO::FETCH_ASSOC);
-    if (!$row) {
-      json_err("NOT_FOUND", "not_found", 404);
-    }
-    json_ok($row);
-
-  } else {
-    // ----- อ่านคำถามทั้งหมด -----
-    $sql = "
-      SELECT
-        q.*,
-        (
-          SELECT GROUP_CONCAT(dq.disease_id ORDER BY dq.disease_id SEPARATOR ',')
-          FROM disease_questions dq
-          WHERE dq.question_id = q.question_id
-        ) AS disease_ids
-      FROM questions q
-      ORDER BY q.sort_order ASC, q.question_id ASC
-    ";
-
-    $st = $dbh->prepare($sql);
-    $st->execute();
-    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-    json_ok($rows);
-  }
+  $st = $pdo->prepare($sql); // ✅ ใช้ $pdo ถ้า db.php ของคุณเป็น PDO ชื่อนี้
+  $st->execute();
+  json_ok($st->fetchAll(PDO::FETCH_ASSOC));
 
 } catch (Throwable $e) {
-  json_err("DB_ERROR", "db_error", 500);
+  json_err("DB_ERROR","db_error",500);
 }

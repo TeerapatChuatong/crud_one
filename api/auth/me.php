@@ -1,36 +1,27 @@
 <?php
-require_once __DIR__ . '/require_auth.php';
+require_once __DIR__ . '/../db.php';
+$auth = require_once __DIR__ . '/require_auth.php';
 
 try {
-  // require_auth.php ใส่ $AUTH_USER_ID ไว้แล้ว
-  $userId = $AUTH_USER_ID ?? ($_SESSION['user_id'] ?? null);
-  if (!$userId) {
-    json_err("AUTH_ERROR", "not_logged_in", 401);
-  }
+  $userId = (int)($auth['id'] ?? 0);
+  if ($userId <= 0) json_err("AUTH_ERROR", "not_logged_in", 401);
 
   $stmt = $dbh->prepare("
-    SELECT
-      id,
-      username,
-      email,
-      role,
-      created_at
+    SELECT user_id, username, email, role, created_at
     FROM `user`
-    WHERE id = :id
+    WHERE user_id = :id
     LIMIT 1
   ");
   $stmt->execute([':id' => $userId]);
   $u = $stmt->fetch(PDO::FETCH_ASSOC);
 
-  if (!$u) {
-    json_err("NOT_FOUND", "user_not_found", 404);
-  }
+  if (!$u) json_err("NOT_FOUND", "user_not_found", 404);
 
-  // ส่ง token กลับ (session_id) เผื่อ Flutter ใช้ต่อ
+  $u['id'] = (int)$u['user_id'];
+  unset($u['user_id']);
+
   $token = session_id();
-  if ($token) {
-    $u['token'] = $token;
-  }
+  if ($token) $u['token'] = $token;
 
   json_ok($u);
 

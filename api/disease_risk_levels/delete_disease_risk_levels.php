@@ -6,13 +6,11 @@ if ($_SERVER['REQUEST_METHOD'] !== 'DELETE') {
   json_err("METHOD_NOT_ALLOWED","delete_only",405);
 }
 
-$id = $_GET['id'] ?? null;
-if (!$id || !ctype_digit((string)$id)) {
-  json_err("VALIDATION_ERROR","invalid_id",400);
-}
+$id = $_GET['risk_level_id'] ?? ($_GET['id'] ?? null);
+if (!$id || !ctype_digit((string)$id)) json_err("VALIDATION_ERROR","invalid_id",400);
 
 try {
-  $st = $dbh->prepare("DELETE FROM disease_risk_levels WHERE id=?");
+  $st = $dbh->prepare("DELETE FROM disease_risk_levels WHERE risk_level_id=?");
   $st->execute([(int)$id]);
   json_ok(true);
 } catch (Throwable $e) {

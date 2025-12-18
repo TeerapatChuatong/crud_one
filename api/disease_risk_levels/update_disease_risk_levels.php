@@ -7,40 +7,35 @@ if ($_SERVER['REQUEST_METHOD'] !== 'PATCH') {
 }
 
 $body = json_decode(file_get_contents("php://input"), true) ?: [];
-$id   = $body['id'] ?? null;
+$id = $body['risk_level_id'] ?? ($body['id'] ?? null);
 
-if (!$id || !ctype_digit((string)$id)) {
-  json_err("VALIDATION_ERROR","invalid_id",400);
-}
+if (!$id || !ctype_digit((string)$id)) json_err("VALIDATION_ERROR","invalid_id",400);
 
 $fields = [];
 $params = [];
 
-$allowed_levels = ['low','medium','high'];
-
-if (array_key_exists('disease_id',$body)) {
-  $disease_id = $body['disease_id'] ?? null;
-  if (!$disease_id || !ctype_digit((string)$disease_id)) {
-    json_err("VALIDATION_ERROR","invalid_disease_id",400);
-  }
+if (array_key_exists('disease_id', $body)) {
+  if (!$body['disease_id'] || !ctype_digit((string)$body['disease_id'])) json_err("VALIDATION_ERROR","invalid_disease_id",400);
   $fields[] = "disease_id=?";
-  $params[] = (int)$disease_id;
+  $params[] = (int)$body['disease_id'];
 }
-if (array_key_exists('level_code',$body)) {
-  $level_code = trim($body['level_code'] ?? '');
-  if (!in_array($level_code, $allowed_levels, true)) {
-    json_err("VALIDATION_ERROR","invalid_level_code",400);
-  }
+
+if (array_key_exists('level_code', $body)) {
+  $lc = trim((string)$body['level_code']);
+  if ($lc === '') json_err("VALIDATION_ERROR","invalid_level_code",400);
   $fields[] = "level_code=?";
-  $params[] = $level_code;
+  $params[] = $lc;
 }
-if (array_key_exists('min_score',$body)) {
-  $min_score = $body['min_score'] ?? null;
-  if ($min_score === null || !ctype_digit((string)$min_score)) {
-    json_err("VALIDATION_ERROR","invalid_min_score",400);
-  }
+
+if (array_key_exists('min_score', $body)) {
+  if (!is_numeric($body['min_score'])) json_err("VALIDATION_ERROR","invalid_min_score",400);
   $fields[] = "min_score=?";
-  $params[] = (int)$min_score;
+  $params[] = (int)$body['min_score'];
+}
+
+if (array_key_exists('days', $body)) {
+  $fields[] = "days=?";
+  $params[] = ($body['days'] === null || $body['days'] === '') ? null : (int)$body['days'];
 }
 
 if (!$fields) json_err("VALIDATION_ERROR","nothing_to_update",400);
@@ -48,8 +43,8 @@ if (!$fields) json_err("VALIDATION_ERROR","nothing_to_update",400);
 $params[] = (int)$id;
 
 try {
-  $sql = "UPDATE disease_risk_levels SET ".implode(',', $fields)." WHERE id=?";
-  $st  = $dbh->prepare($sql);
+  $sql = "UPDATE disease_risk_levels SET ".implode(", ", $fields)." WHERE risk_level_id=?";
+  $st = $dbh->prepare($sql);
   $st->execute($params);
   json_ok(true);
 } catch (Throwable $e) {
