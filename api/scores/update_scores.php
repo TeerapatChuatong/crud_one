@@ -1,56 +1,127 @@
 <?php
 require_once __DIR__ . '/../db.php';
+require_admin();
+
+if (!in_array($_SERVER['REQUEST_METHOD'], ['PATCH', 'POST'], true)) {
+  json_err("METHOD_NOT_ALLOWED", "patch_or_post_only", 405);
+}
+
+$raw  = file_get_contents('php://input');
+$body = json_decode($raw, true);
+if (!is_array($body) || empty($body)) $body = $_POST ?? [];
+
+function int_field_nullable($v, $name, $min = 0) {
+  if ($v === null || $v === '') return null;
+  if (is_int($v)) {
+    if ($v < $min) json_err("VALIDATION_ERROR", "{$name}_min_{$min}", 422);
+    return $v;
+  }
+  $s = trim((string)$v);
+  if (!preg_match('/^\d+$/', $s)) json_err("VALIDATION_ERROR", "{$name}_must_be_int", 422);
+  $n = (int)$s;
+  if ($n < $min) json_err("VALIDATION_ERROR", "{$name}_min_{$min}", 422);
+  return $n;
+}
+
+function int_field($v, $name, $min = 0) {
+  $n = int_field_nullable($v, $name, $min);
+  if ($n === null) json_err("VALIDATION_ERROR", "{$name}_required", 422);
+  return $n;
+}
+
+// รองรับทั้งแบบส่ง disease_question_id หรือ disease_id+question_id
+$disease_question_id = int_field_nullable($body['disease_question_id'] ?? null, "disease_question_id", 1);
+$disease_id = int_field_nullable($body['disease_id'] ?? null, "disease_id", 1);
+$question_id = int_field_nullable($body['question_id'] ?? null, "question_id", 1);
+
+$choice_id = int_field($body['choice_id'] ?? null, "choice_id", 1);
+$score_value = $body['score_value'] ?? $body['risk_score'] ?? $body['score'] ?? null;
+$score_value = int_field($score_value, "score_value", 0);
 
 try {
-  require_admin();
-
-  $body = json_decode(file_get_contents("php://input"), true) ?: [];
-
-  $disease_question_id = $body['disease_question_id'] ?? null;
-  $scores = $body['scores'] ?? null; // array [{choice_id, score_value}]
-
-  // รองรับส่งเดี่ยว
-  if ($scores === null && isset($body['choice_id'])) {
-    $scores = [[
-      "choice_id" => $body["choice_id"],
-      "score_value" => $body["score_value"] ?? 0
-    ]];
-  }
-
-  if (!ctype_digit((string)$disease_question_id) || !is_array($scores)) {
-    json_err('VALIDATION_ERROR', 'invalid_input', 400);
-  }
-
   $pdo->beginTransaction();
 
-  $sel = $pdo->prepare("SELECT score_id FROM scores WHERE disease_question_id=? AND choice_id=? LIMIT 1");
-  $ins = $pdo->prepare("INSERT INTO scores (disease_question_id, choice_id, score_value) VALUES (?,?,?)");
-  $upd = $pdo->prepare("UPDATE scores SET score_value=? WHERE score_id=?");
+  // resolve disease_question_id + max_score
+  if (!$disease_question_id) {
+    if (!$disease_id || !$question_id) {
+      $pdo->rollBack();
+      json_err("VALIDATION_ERROR", "need_disease_question_id_or_(disease_id+question_id)", 422);
+    }
 
-  $out = [];
+    $st = $pdo->prepare("
+      SELECT dq.disease_question_id, q.max_score
+      FROM disease_questions dq
+      JOIN questions q ON q.question_id = dq.question_id
+      WHERE dq.disease_id = ? AND dq.question_id = ?
+      LIMIT 1
+    ");
+    $st->execute([$disease_id, $question_id]);
+  } else {
+    $st = $pdo->prepare("
+      SELECT dq.disease_question_id, q.max_score
+      FROM disease_questions dq
+      JOIN questions q ON q.question_id = dq.question_id
+      WHERE dq.disease_question_id = ?
+      LIMIT 1
+    ");
+    $st->execute([$disease_question_id]);
+  }
 
-  foreach ($scores as $s) {
-    $choice_id = $s['choice_id'] ?? null;
-    $score_value = $s['score_value'] ?? 0;
+  $dq = $st->fetch(PDO::FETCH_ASSOC);
+  if (!$dq) {
+    $pdo->rollBack();
+    json_err("NOT_FOUND", "disease_question_not_found", 404);
+  }
 
-    if (!ctype_digit((string)$choice_id)) continue;
+  $disease_question_id = (int)$dq['disease_question_id'];
+  $max_score = isset($dq['max_score']) ? (int)$dq['max_score'] : 0;
 
-    $sel->execute([(int)$disease_question_id, (int)$choice_id]);
-    $found = $sel->fetch();
+  // validate max_score
+  if ($max_score > 0) {
+    $sumSt = $pdo->prepare("
+      SELECT COALESCE(SUM(score_value),0) AS total
+      FROM scores
+      WHERE disease_question_id = ? AND choice_id <> ?
+    ");
+    $sumSt->execute([$disease_question_id, $choice_id]);
+    $base = (int)($sumSt->fetchColumn() ?? 0);
 
-    if ($found) {
-      $upd->execute([(int)$score_value, (int)$found['score_id']]);
-      $out[] = ["score_id" => (int)$found['score_id'], "choice_id" => (int)$choice_id, "score_value" => (int)$score_value];
-    } else {
-      $ins->execute([(int)$disease_question_id, (int)$choice_id, (int)$score_value]);
-      $out[] = ["score_id" => (int)$pdo->lastInsertId(), "choice_id" => (int)$choice_id, "score_value" => (int)$score_value];
+    $newTotal = $base + $score_value;
+    if ($newTotal > $max_score) {
+      $pdo->rollBack();
+      http_response_code(422);
+      echo json_encode([
+        "ok" => false,
+        "error" => "MAX_SCORE_EXCEEDED",
+        "message" => "คะแนนรวมของคำตอบทั้งหมด ($newTotal) เกินคะแนนสูงสุดของคำถาม ($max_score)",
+        "max_score" => $max_score,
+        "total_after" => $newTotal,
+        "over_by" => $newTotal - $max_score,
+      ], JSON_UNESCAPED_UNICODE);
+      exit;
     }
   }
 
-  $pdo->commit();
+  // upsert (ให้ updateScoreApi ใช้งานได้จริง)
+  $ins = $pdo->prepare("
+    INSERT INTO scores (disease_question_id, choice_id, score_value)
+    VALUES (?, ?, ?)
+    ON DUPLICATE KEY UPDATE score_value = VALUES(score_value)
+  ");
+  $ins->execute([$disease_question_id, $choice_id, $score_value]);
 
-  json_ok(["updated" => true, "items" => $out]);
+  $out = $pdo->prepare("
+    SELECT score_id, disease_question_id, choice_id, score_value
+    FROM scores
+    WHERE disease_question_id = ? AND choice_id = ?
+    LIMIT 1
+  ");
+  $out->execute([$disease_question_id, $choice_id]);
+
+  $pdo->commit();
+  json_ok($out->fetch(PDO::FETCH_ASSOC));
+
 } catch (Throwable $e) {
-  if ($pdo && $pdo->inTransaction()) $pdo->rollBack();
-  json_err('DB_ERROR', 'db_error', 500);
+  if ($pdo->inTransaction()) $pdo->rollBack();
+  json_err("DB_ERROR", "db_error", 500);
 }
