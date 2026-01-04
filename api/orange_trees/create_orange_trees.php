@@ -1,63 +1,53 @@
 <?php
-// api/orange_trees/create_orange_trees.php
-require_once __DIR__ . '/../db.php';
+header("Content-Type: application/json; charset=utf-8");
 
-// ต้องล็อกอินก่อนถึงจะเพิ่มต้นได้
-require_login();
+require_once __DIR__ . "/../db.php";
+require_once __DIR__ . "/../auth/require_auth.php"; // ✅ ใช้ Bearer token
 
-// method guard
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-  json_err("METHOD_NOT_ALLOWED", "post_only", 405);
+if (($_SERVER["REQUEST_METHOD"] ?? "") !== "POST") {
+  json_err("METHOD_NOT_ALLOWED", "Use POST", 405);
 }
 
-// ดึง user_id จาก session
-$currentUserId = (string)($_SESSION['user_id'] ?? '');
-if ($currentUserId === '') {
-  json_err("UNAUTHORIZED", "no_user_in_session", 401);
-}
+$raw = file_get_contents("php://input");
+$body = json_decode($raw, true);
+if (!is_array($body)) $body = $_POST ?? [];
 
-// รับ JSON body
-$body = json_decode(file_get_contents("php://input"), true) ?: [];
+$session_uid = (int)($_SESSION["user_id"] ?? 0);
+if ($session_uid <= 0) json_err("UNAUTHORIZED", "Please login", 401);
 
-$tree_name       = trim($body['tree_name']       ?? '');
-$location_in_farm = trim($body['location_in_farm'] ?? '');
+$isAdmin = function_exists("is_admin") ? (bool)is_admin() : false;
 
-if ($tree_name === '') {
-  json_err("VALIDATION_ERROR", "tree_name_required", 400);
-}
+$user_id = $session_uid;
+if ($isAdmin && isset($body["user_id"])) $user_id = (int)$body["user_id"];
+
+$tree_name = trim((string)($body["tree_name"] ?? ""));
+$description = isset($body["description"]) ? trim((string)$body["description"]) : null;
+if ($description === "") $description = null;
+
+if ($tree_name === "") json_err("INVALID_INPUT", "tree_name is required", 400);
 
 try {
-  // 1) ดึง tree_id ล่าสุด (เป็นตัวเลขมากที่สุดในตาราง)
-  $st = $dbh->query("SELECT MAX(CAST(tree_id AS UNSIGNED)) AS max_id FROM orange_trees");
-  $maxId = $st->fetchColumn();
-
-  // 2) ถ้ายังไม่มีข้อมูลเลย → เริ่มจาก 1, ถ้ามีแล้ว → +1
-  if ($maxId === null || $maxId === false) {
-    $nextId = 1;
-  } else {
-    $nextId = (int)$maxId + 1;
-  }
-
-  // 3) แปลงเป็น string เพื่อเก็บใน tree_id
-  $tree_id = (string)$nextId;
-
-  // 4) บันทึกลงฐานข้อมูล
-  $sql = "INSERT INTO orange_trees (tree_id, user_id, tree_name, location_in_farm)
-          VALUES (?, ?, ?, ?)";
-  $st = $dbh->prepare($sql);
-  $st->execute([
-    $tree_id,
-    $currentUserId,
-    $tree_name,
-    $location_in_farm !== '' ? $location_in_farm : null,
+  $stmt = $dbh->prepare(
+    "INSERT INTO orange_trees (user_id, tree_name, description)
+     VALUES (:user_id, :tree_name, :description)"
+  );
+  $stmt->execute([
+    ":user_id" => $user_id,
+    ":tree_name" => $tree_name,
+    ":description" => $description,
   ]);
 
-  json_ok([
-    "tree_id"          => $tree_id,
-    "user_id"          => $currentUserId,
-    "tree_name"        => $tree_name,
-    "location_in_farm" => $location_in_farm !== '' ? $location_in_farm : null,
-  ]);
-} catch (Throwable $e) {
-  json_err("DB_ERROR", "db_error", 500);
+  $tree_id = (int)$dbh->lastInsertId();
+
+  $stmt2 = $dbh->prepare(
+    "SELECT tree_id, user_id, tree_name, description, created_at
+     FROM orange_trees
+     WHERE tree_id = :tree_id"
+  );
+  $stmt2->execute([":tree_id" => $tree_id]);
+  $row = $stmt2->fetch(PDO::FETCH_ASSOC);
+
+  json_ok($row ?: ["tree_id" => $tree_id]);
+} catch (Exception $e) {
+  json_err("DB_ERROR", $e->getMessage(), 500);
 }

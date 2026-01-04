@@ -1,47 +1,65 @@
 <?php
-require_once __DIR__ . '/../db.php';
-require_admin();
+header("Content-Type: application/json; charset=utf-8");
 
-if ($_SERVER['REQUEST_METHOD'] !== 'PATCH') {
-  json_err("METHOD_NOT_ALLOWED","patch_only",405);
+require_once __DIR__ . "/../db.php";
+require_once __DIR__ . "/../auth/require_auth.php";
+
+$method = $_SERVER["REQUEST_METHOD"] ?? "";
+if ($method !== "PATCH" && $method !== "POST") {
+  json_err("METHOD_NOT_ALLOWED", "Use PATCH or POST", 405);
 }
 
-$body    = json_decode(file_get_contents("php://input"), true) ?: [];
-$tree_id = trim($body['tree_id'] ?? '');
+$session_uid = (int)($_SESSION["user_id"] ?? 0);
+if ($session_uid <= 0) json_err("UNAUTHORIZED", "Please login", 401);
 
-if ($tree_id === '') {
-  json_err("VALIDATION_ERROR","tree_id_required",400);
-}
+$isAdmin = function_exists("is_admin") ? (bool)is_admin() : false;
 
-$fields = [];
-$params = [];
+$raw = file_get_contents("php://input");
+$body = json_decode($raw, true);
+if (!is_array($body)) $body = $_POST ?? [];
 
-if (array_key_exists('user_id',$body)) {
-  $user_id = trim($body['user_id'] ?? '');
-  if ($user_id === '') json_err("VALIDATION_ERROR","user_id_required",400);
-  $fields[] = "user_id=?";
-  $params[] = $user_id;
-}
-if (array_key_exists('tree_name',$body)) {
-  $tree_name = trim($body['tree_name'] ?? '');
-  if ($tree_name === '') json_err("VALIDATION_ERROR","tree_name_required",400);
-  $fields[] = "tree_name=?";
-  $params[] = $tree_name;
-}
-if (array_key_exists('location_in_farm',$body)) {
-  $fields[] = "location_in_farm=?";
-  $params[] = trim($body['location_in_farm'] ?? '') ?: null;
-}
-
-if (!$fields) json_err("VALIDATION_ERROR","nothing_to_update",400);
-
-$params[] = $tree_id;
+$tree_id = isset($body["tree_id"]) ? (int)$body["tree_id"] : 0;
+if ($tree_id <= 0) json_err("INVALID_INPUT", "tree_id is required", 400);
 
 try {
-  $sql = "UPDATE orange_trees SET ".implode(',', $fields)." WHERE tree_id=?";
-  $st  = $dbh->prepare($sql);
-  $st->execute($params);
-  json_ok(true);
-} catch (Throwable $e) {
-  json_err("DB_ERROR","db_error",500);
+  $stmt0 = $dbh->prepare("SELECT user_id FROM orange_trees WHERE tree_id = :tree_id");
+  $stmt0->execute([":tree_id" => $tree_id]);
+  $owner = (int)($stmt0->fetchColumn() ?? 0);
+
+  if ($owner <= 0) json_err("NOT_FOUND", "Tree not found", 404);
+  if (!$isAdmin && $owner !== $session_uid) json_err("FORBIDDEN", "Not allowed", 403);
+
+  $tree_name = isset($body["tree_name"]) ? trim((string)$body["tree_name"]) : null;
+  $description = isset($body["description"]) ? trim((string)$body["description"]) : null;
+
+  $fields = [];
+  $params = [":tree_id" => $tree_id];
+
+  if ($tree_name !== null) {
+    if ($tree_name === "") json_err("INVALID_INPUT", "tree_name cannot be empty", 400);
+    $fields[] = "tree_name = :tree_name";
+    $params[":tree_name"] = $tree_name;
+  }
+  if ($description !== null) {
+    if ($description === "") $description = null;
+    $fields[] = "description = :description";
+    $params[":description"] = $description;
+  }
+
+  if (!$fields) json_err("INVALID_INPUT", "No fields to update", 400);
+
+  $sql = "UPDATE orange_trees SET " . implode(", ", $fields) . " WHERE tree_id = :tree_id";
+  $stmt = $dbh->prepare($sql);
+  $stmt->execute($params);
+
+  $stmt2 = $dbh->prepare(
+    "SELECT tree_id, user_id, tree_name, description, created_at
+     FROM orange_trees
+     WHERE tree_id = :tree_id"
+  );
+  $stmt2->execute([":tree_id" => $tree_id]);
+
+  json_ok($stmt2->fetch(PDO::FETCH_ASSOC));
+} catch (Exception $e) {
+  json_err("DB_ERROR", $e->getMessage(), 500);
 }

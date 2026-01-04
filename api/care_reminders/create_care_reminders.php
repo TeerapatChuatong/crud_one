@@ -2,96 +2,109 @@
 // api/care_reminders/create_care_reminders.php
 require_once __DIR__ . '/../db.php';
 
-// ต้องล็อกอินก่อน
+$authFile = __DIR__ . '/../auth/require_auth.php';
+if (file_exists($authFile)) require_once $authFile;
+if (function_exists('require_auth')) { require_auth(); }
 require_login();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
   json_err("METHOD_NOT_ALLOWED", "post_only", 405);
 }
 
-// ดึง user_id จาก session
-$currentUserId = (string)($_SESSION['user_id'] ?? '');
-if ($currentUserId === '') {
-  json_err("UNAUTHORIZED", "no_user_in_session", 401);
-}
+$currentUserId = (int)($_SESSION['user_id'] ?? 0);
+$is_admin = function_exists('is_admin') ? is_admin() : false;
 
-// รับ JSON body
 $body = json_decode(file_get_contents("php://input"), true) ?: [];
 
-// ===== รับค่าจาก body =====
-$tree_id     = trim($body['tree_id']     ?? '');
-$care_type   = trim($body['care_type']   ?? '');
-$title       = trim($body['title']       ?? '');
-$description = trim($body['description'] ?? '');
-$remind_date = trim($body['remind_date'] ?? '');
-$related_log_id = $body['related_log_id'] ?? null;  // optional
+$tree_id = $body['tree_id'] ?? null;
+$diagnosis_history_id = $body['diagnosis_history_id'] ?? null;
+$treatment_id = $body['treatment_id'] ?? null;
+$reminder_date = trim((string)($body['reminder_date'] ?? ''));
+$note = $body['note'] ?? null;
+$is_done = $body['is_done'] ?? 0;
 
-$allowed_types = ['fertilizer','pesticide','watering','pruning','other'];
-
-// ===== ตรวจข้อมูลจำเป็น =====
-if ($tree_id === '') {
+if ($tree_id === null || !ctype_digit((string)$tree_id)) {
   json_err("VALIDATION_ERROR", "tree_id_required", 400);
 }
+$tree_id = (int)$tree_id;
 
-if ($care_type === '' || !in_array($care_type, $allowed_types, true)) {
-  json_err("VALIDATION_ERROR", "invalid_care_type", 400);
+if ($reminder_date === '') {
+  json_err("VALIDATION_ERROR", "reminder_date_required", 400);
+}
+$dt = DateTime::createFromFormat('Y-m-d', $reminder_date);
+if (!$dt || $dt->format('Y-m-d') !== $reminder_date) {
+  json_err("VALIDATION_ERROR", "invalid_reminder_date_format_use_Y-m-d", 400);
 }
 
-if ($title === '') {
-  json_err("VALIDATION_ERROR", "title_required", 400);
+if ($diagnosis_history_id !== null && $diagnosis_history_id !== '' && !ctype_digit((string)$diagnosis_history_id)) {
+  json_err("VALIDATION_ERROR", "invalid_diagnosis_history_id", 400);
 }
+$diagnosis_history_id = ($diagnosis_history_id === null || $diagnosis_history_id === '') ? null : (int)$diagnosis_history_id;
 
-if ($remind_date === '') {
-  json_err("VALIDATION_ERROR", "remind_date_required", 400);
+if ($treatment_id !== null && $treatment_id !== '' && !ctype_digit((string)$treatment_id)) {
+  json_err("VALIDATION_ERROR", "invalid_treatment_id", 400);
 }
+$treatment_id = ($treatment_id === null || $treatment_id === '') ? null : (int)$treatment_id;
 
-// related_log_id เป็น optional แต่ถ้าส่งมาก็ต้องเป็นตัวเลข
-if ($related_log_id !== null && $related_log_id !== '' && !ctype_digit((string)$related_log_id)) {
-  json_err("VALIDATION_ERROR", "invalid_related_log_id", 400);
-}
-$related_log_id = ($related_log_id === '' ? null : $related_log_id);
-
-// description ว่างได้ → เก็บเป็น NULL
-$description = ($description === '' ? null : $description);
+$is_done = ($is_done == 1 || $is_done === true || $is_done === "1") ? 1 : 0;
+$note = is_string($note) ? trim($note) : $note;
+$note = ($note === '' ? null : $note);
 
 try {
-  // reminder_id เป็น AUTO_INCREMENT อยู่แล้ว ไม่ต้องระบุ
-  // is_done ให้เริ่มต้นเป็น 0 (ยังไม่ทำ)
-  $sql = "INSERT INTO care_reminders (
-            user_id,
-            tree_id,
-            care_type,
-            title,
-            description,
-            remind_date,
-            is_done,
-            related_log_id
-          ) VALUES (?,?,?,?,?,?,0,?)";
+  // ✅ ตรวจว่า tree_id เป็นของ user นี้ (กันยิง tree คนอื่น)
+  if (!$is_admin) {
+    $st = $dbh->prepare("SELECT 1 FROM orange_trees WHERE tree_id=? AND user_id=?");
+    $st->execute([$tree_id, $currentUserId]);
+    if (!$st->fetchColumn()) {
+      json_err("FORBIDDEN", "tree_not_belong_to_user", 403);
+    }
+  }
 
+  // ✅ ถ้าส่ง diagnosis_history_id มา ตรวจว่าของ user และ tree ตรงกัน
+  if ($diagnosis_history_id !== null) {
+    $sql = "SELECT user_id, tree_id FROM diagnosis_history WHERE diagnosis_history_id=?";
+    $st = $dbh->prepare($sql);
+    $st->execute([$diagnosis_history_id]);
+    $h = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$h) json_err("VALIDATION_ERROR", "diagnosis_history_not_found", 400);
+
+    if (!$is_admin && (int)$h['user_id'] !== $currentUserId) {
+      json_err("FORBIDDEN", "history_not_belong_to_user", 403);
+    }
+    if ((int)$h['tree_id'] !== $tree_id) {
+      json_err("VALIDATION_ERROR", "history_tree_id_mismatch", 400);
+    }
+  }
+
+  // ✅ ถ้าส่ง treatment_id มา ตรวจว่ามีจริง
+  if ($treatment_id !== null) {
+    $st = $dbh->prepare("SELECT 1 FROM treatments WHERE treatment_id=?");
+    $st->execute([$treatment_id]);
+    if (!$st->fetchColumn()) {
+      json_err("VALIDATION_ERROR", "treatment_not_found", 400);
+    }
+  }
+
+  $sql = "INSERT INTO care_reminders
+          (user_id, tree_id, diagnosis_history_id, treatment_id, reminder_date, is_done, note)
+          VALUES (?,?,?,?,?,?,?)";
   $st = $dbh->prepare($sql);
   $st->execute([
     $currentUserId,
     $tree_id,
-    $care_type,
-    $title,
-    $description,
-    $remind_date,
-    $related_log_id,
+    $diagnosis_history_id,
+    $treatment_id,
+    $reminder_date,
+    $is_done,
+    $note
   ]);
 
   $reminder_id = (int)$dbh->lastInsertId();
 
-  json_ok([
-    "reminder_id"   => $reminder_id,
-    "user_id"       => $currentUserId,
-    "tree_id"       => $tree_id,
-    "care_type"     => $care_type,
-    "title"         => $title,
-    "description"   => $description,
-    "remind_date"   => $remind_date,
-    "is_done"       => 0,
-    "related_log_id"=> $related_log_id,
-  ]);
+  $st2 = $dbh->prepare("SELECT * FROM care_reminders WHERE reminder_id=?");
+  $st2->execute([$reminder_id]);
+  json_ok($st2->fetch(PDO::FETCH_ASSOC));
+
 } catch (Throwable $e) {
   json_err("DB_ERROR", "db_error", 500);
 }

@@ -1,46 +1,39 @@
 <?php
-// api/orange_trees/search_orange_trees.php
-require_once __DIR__ . '/../db.php';
-require_login();
+header("Content-Type: application/json; charset=utf-8");
 
-if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
-  json_err("METHOD_NOT_ALLOWED", "get_only", 405);
+require_once __DIR__ . "/../db.php";
+require_once __DIR__ . "/../auth/require_auth.php";
+
+if (($_SERVER["REQUEST_METHOD"] ?? "") !== "GET") {
+  json_err("METHOD_NOT_ALLOWED", "Use GET", 405);
 }
 
-$q        = trim($_GET['q'] ?? '');
-$user_id  = trim($_GET['user_id'] ?? '');
-$is_admin = is_admin();
-$current  = (string)($_SESSION['user_id'] ?? '');
+$session_uid = (int)($_SESSION["user_id"] ?? 0);
+if ($session_uid <= 0) json_err("UNAUTHORIZED", "Please login", 401);
+
+$isAdmin = function_exists("is_admin") ? (bool)is_admin() : false;
+
+$q = trim((string)($_GET["q"] ?? ""));
+$user_id = $session_uid;
+if ($isAdmin && isset($_GET["user_id"])) $user_id = (int)$_GET["user_id"];
 
 try {
-  $sql    = "SELECT * FROM orange_trees";
-  $where  = [];
-  $params = [];
+  $like = "%" . $q . "%";
 
-  if ($is_admin && $user_id !== '') {
-    $where[]  = "user_id = ?";
-    $params[] = $user_id;
-  } else {
-    $where[]  = "user_id = ?";
-    $params[] = $current;
-  }
+  $stmt = $dbh->prepare(
+    "SELECT tree_id, user_id, tree_name, description, created_at
+     FROM orange_trees
+     WHERE user_id = :user_id
+       AND (:q = '' OR tree_name LIKE :likeq OR description LIKE :likeq)
+     ORDER BY tree_id DESC"
+  );
+  $stmt->execute([
+    ":user_id" => $user_id,
+    ":q" => $q,
+    ":likeq" => $like,
+  ]);
 
-  if ($q !== '') {
-    $where[]  = "(tree_name LIKE ? OR location_in_farm LIKE ?)";
-    $params[] = "%{$q}%";
-    $params[] = "%{$q}%";
-  }
-
-  if ($where) {
-    $sql .= " WHERE " . implode(" AND ", $where);
-  }
-
-  $sql .= " ORDER BY CAST(tree_id AS UNSIGNED) ASC";
-
-  $st = $dbh->prepare($sql);
-  $st->execute($params);
-
-  json_ok($st->fetchAll(PDO::FETCH_ASSOC));
-} catch (Throwable $e) {
-  json_err("DB_ERROR", "db_error", 500);
+  json_ok($stmt->fetchAll(PDO::FETCH_ASSOC));
+} catch (Exception $e) {
+  json_err("DB_ERROR", $e->getMessage(), 500);
 }

@@ -2,115 +2,81 @@
 // api/care_reminders/update_care_reminders.php
 require_once __DIR__ . '/../db.php';
 
-require_login(); // ต้องล็อกอินก่อน
+$authFile = __DIR__ . '/../auth/require_auth.php';
+if (file_exists($authFile)) require_once $authFile;
+if (function_exists('require_auth')) { require_auth(); }
+require_login();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'PATCH' && $_SERVER['REQUEST_METHOD'] !== 'POST') {
-  json_err("METHOD_NOT_ALLOWED", "patch_only", 405);
+  json_err("METHOD_NOT_ALLOWED", "patch_or_post_only", 405);
 }
 
-// อ่าน JSON body
-$raw = file_get_contents("php://input");
-$data = json_decode($raw, true);
-if (!is_array($data)) {
-  json_err("INVALID_JSON", "invalid_json", 400);
-}
+$currentUserId = (int)($_SESSION['user_id'] ?? 0);
+$is_admin = function_exists('is_admin') ? is_admin() : false;
 
-// --------- ดึงค่าและ validate เบื้องต้น ----------
-$reminder_id   = $data['reminder_id']   ?? null;
-$is_done_input = $data['is_done']       ?? null;   // optional
-$related_logId = $data['related_log_id'] ?? null;  // optional
+$body = json_decode(file_get_contents("php://input"), true);
+if (!is_array($body)) json_err("INVALID_JSON", "invalid_json", 400);
 
+$reminder_id = $body['reminder_id'] ?? null;
 if ($reminder_id === null || !ctype_digit((string)$reminder_id)) {
   json_err("VALIDATION_ERROR", "reminder_id_required", 400);
 }
 $reminder_id = (int)$reminder_id;
 
-$currentUserId = (string)($_SESSION['user_id'] ?? '');
-$is_admin      = is_admin();
+$is_done = $body['is_done'] ?? null;          // optional
+$reminder_date = $body['reminder_date'] ?? null; // optional
+$note = $body['note'] ?? null;                // optional
 
 try {
-  // 1) ดึง reminder เดิมมาก่อน
-  $st = $dbh->prepare("SELECT * FROM care_reminders WHERE reminder_id = ?");
+  $st = $dbh->prepare("SELECT * FROM care_reminders WHERE reminder_id=?");
   $st->execute([$reminder_id]);
   $row = $st->fetch(PDO::FETCH_ASSOC);
+  if (!$row) json_err("NOT_FOUND","not_found",404);
 
-  if (!$row) {
-    json_err("NOT_FOUND", "reminder_not_found", 404);
+  if (!$is_admin && (int)$row['user_id'] !== $currentUserId) {
+    json_err("FORBIDDEN","cannot_edit_other_user",403);
   }
 
-  // 2) ตรวจสิทธิ์: user ทั่วไปแก้ได้เฉพาะของตัวเอง
-  if (!$is_admin && (string)$row['user_id'] !== $currentUserId) {
-    json_err("FORBIDDEN", "cannot_edit_other_user_reminder", 403);
+  $sets = [];
+  $params = [];
+
+  if ($is_done !== null) {
+    $v = ($is_done == 1 || $is_done === true || $is_done === "1") ? 1 : 0;
+    $sets[] = "is_done=?";
+    $params[] = $v;
   }
 
-  // 3) เตรียมค่าที่จะอัปเดต
-  $new_is_done = $row['is_done']; // ค่าเดิมใน DB (0/1)
-
-  if ($is_done_input !== null) {
-    // แปลง bool/string -> 0/1
-    if (is_bool($is_done_input)) {
-      $new_is_done = $is_done_input ? 1 : 0;
-    } elseif ($is_done_input === 1 || $is_done_input === 0 || $is_done_input === "1" || $is_done_input === "0") {
-      $new_is_done = (int)$is_done_input;
-    } else {
-      json_err("VALIDATION_ERROR", "invalid_is_done", 400);
+  if ($reminder_date !== null) {
+    $reminder_date = trim((string)$reminder_date);
+    $dt = DateTime::createFromFormat('Y-m-d', $reminder_date);
+    if (!$dt || $dt->format('Y-m-d') !== $reminder_date) {
+      json_err("VALIDATION_ERROR", "invalid_reminder_date_format_use_Y-m-d", 400);
     }
+    $sets[] = "reminder_date=?";
+    $params[] = $reminder_date;
   }
 
-  // ค่าเริ่มต้นของ related_log_id ใช้ของเดิม
-  $new_related_log_id = $row['related_log_id'];
-
-  // 4) ถ้ามีส่ง related_log_id มา → ตรวจว่า care_logs มีจริง และเป็นของ user นี้ (หรืออย่างน้อยมีอยู่)
-  if ($related_logId !== null) {
-    if (!ctype_digit((string)$related_logId)) {
-      json_err("VALIDATION_ERROR", "invalid_related_log_id", 400);
-    }
-    $related_logId = (int)$related_logId;
-
-    // ตรวจ log ในตาราง care_logs
-    $sqlLog = "SELECT * FROM care_logs WHERE log_id = ?";
-    $paramsLog = [$related_logId];
-
-    // ถ้าไม่ใช่ admin → จำกัดให้ต้องเป็น log ของ user นี้
-    if (!$is_admin) {
-      $sqlLog .= " AND user_id = ?";
-      $paramsLog[] = $currentUserId;
-    }
-
-    $stLog = $dbh->prepare($sqlLog);
-    $stLog->execute($paramsLog);
-    $log = $stLog->fetch(PDO::FETCH_ASSOC);
-
-    if (!$log) {
-      json_err("VALIDATION_ERROR", "related_log_not_found", 400);
-    }
-
-    $new_related_log_id = $related_logId;
+  if ($note !== null) {
+    $note = is_string($note) ? trim($note) : $note;
+    $note = ($note === '' ? null : $note);
+    $sets[] = "note=?";
+    $params[] = $note;
   }
 
-  // 5) อัปเดตฐานข้อมูล
-  $stUpd = $dbh->prepare("
-    UPDATE care_reminders
-    SET
-      is_done       = ?,
-      related_log_id = ?
-    WHERE reminder_id = ?
-  ");
-  $stUpd->execute([
-    $new_is_done,
-    $new_related_log_id,
-    $reminder_id,
-  ]);
+  if (!$sets) {
+    json_err("VALIDATION_ERROR","no_fields_to_update",400);
+  }
 
-  // ดึงข้อมูลล่าสุดกลับไปให้
-  $st2 = $dbh->prepare("SELECT * FROM care_reminders WHERE reminder_id = ?");
-  $st2->execute([$reminder_id]);
-  $updated = $st2->fetch(PDO::FETCH_ASSOC);
+  $params[] = $reminder_id;
 
-  json_ok($updated);
+  $sql = "UPDATE care_reminders SET " . implode(", ", $sets) . " WHERE reminder_id=?";
+  $st2 = $dbh->prepare($sql);
+  $st2->execute($params);
+
+  $st3 = $dbh->prepare("SELECT * FROM care_reminders WHERE reminder_id=?");
+  $st3->execute([$reminder_id]);
+  json_ok($st3->fetch(PDO::FETCH_ASSOC));
 
 } catch (Throwable $e) {
-  // ถ้าอยาก debug ให้โชว์ error จริง ๆ ชั่วคราว:
-  // json_err("DB_ERROR", $e->getMessage(), 500);
-  json_err("DB_ERROR", "db_error", 500);
+  json_err("DB_ERROR","db_error",500);
 }

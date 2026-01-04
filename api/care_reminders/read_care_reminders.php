@@ -1,52 +1,88 @@
 <?php
+// api/care_reminders/read_care_reminders.php
 require_once __DIR__ . '/../db.php';
 
+$authFile = __DIR__ . '/../auth/require_auth.php';
+if (file_exists($authFile)) require_once $authFile;
+if (function_exists('require_auth')) { require_auth(); }
+require_login();
+
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
-  json_err("METHOD_NOT_ALLOWED","get_only",405);
+  json_err("METHOD_NOT_ALLOWED", "get_only", 405);
 }
 
-$reminder_id = $_GET['reminder_id'] ?? null;
-$user_id     = $_GET['user_id'] ?? null;
-$tree_id     = $_GET['tree_id'] ?? null;
-$is_done     = $_GET['is_done'] ?? null;
+$currentUserId = (int)($_SESSION['user_id'] ?? 0);
+$is_admin = function_exists('is_admin') ? is_admin() : false;
+
+$reminder_id = $_GET['reminder_id'] ?? '';
+$user_id = $_GET['user_id'] ?? '';
+$tree_id = $_GET['tree_id'] ?? '';
+$is_done = $_GET['is_done'] ?? '';
+$date_from = $_GET['date_from'] ?? '';
+$date_to = $_GET['date_to'] ?? '';
 
 try {
-  if ($reminder_id !== null && $reminder_id !== '') {
-    if (!ctype_digit((string)$reminder_id)) {
-      json_err("VALIDATION_ERROR","invalid_reminder_id",400);
-    }
+  // read one
+  if ($reminder_id !== '' ) {
+    if (!ctype_digit((string)$reminder_id)) json_err("VALIDATION_ERROR","invalid_reminder_id",400);
+    $reminder_id = (int)$reminder_id;
+
     $st = $dbh->prepare("SELECT * FROM care_reminders WHERE reminder_id=?");
-    $st->execute([(int)$reminder_id]);
-    $row = $st->fetch();
+    $st->execute([$reminder_id]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
     if (!$row) json_err("NOT_FOUND","not_found",404);
+
+    if (!$is_admin && (int)$row['user_id'] !== $currentUserId) {
+      json_err("FORBIDDEN","cannot_read_other_user",403);
+    }
     json_ok($row);
   }
 
   $where = [];
   $params = [];
 
-  if ($user_id !== null && $user_id !== '') {
-    $where[]  = "user_id=?";
-    $params[] = $user_id;
+  if ($is_admin && $user_id !== '') {
+    if (!ctype_digit((string)$user_id)) json_err("VALIDATION_ERROR","invalid_user_id",400);
+    $where[] = "user_id=?";
+    $params[] = (int)$user_id;
+  } else {
+    $where[] = "user_id=?";
+    $params[] = $currentUserId;
   }
-  if ($tree_id !== null && $tree_id !== '') {
-    $where[]  = "tree_id=?";
-    $params[] = $tree_id;
+
+  if ($tree_id !== '') {
+    if (!ctype_digit((string)$tree_id)) json_err("VALIDATION_ERROR","invalid_tree_id",400);
+    $where[] = "tree_id=?";
+    $params[] = (int)$tree_id;
   }
-  if ($is_done !== null && $is_done !== '') {
-    $where[]  = "is_done=?";
-    $params[] = ((int)$is_done ? 1 : 0);
+
+  if ($is_done !== '' && ($is_done === '0' || $is_done === '1')) {
+    $where[] = "is_done=?";
+    $params[] = (int)$is_done;
+  }
+
+  if ($date_from !== '') {
+    $dt = DateTime::createFromFormat('Y-m-d', $date_from);
+    if (!$dt || $dt->format('Y-m-d') !== $date_from) json_err("VALIDATION_ERROR","invalid_date_from",400);
+    $where[] = "reminder_date >= ?";
+    $params[] = $date_from;
+  }
+
+  if ($date_to !== '') {
+    $dt = DateTime::createFromFormat('Y-m-d', $date_to);
+    if (!$dt || $dt->format('Y-m-d') !== $date_to) json_err("VALIDATION_ERROR","invalid_date_to",400);
+    $where[] = "reminder_date <= ?";
+    $params[] = $date_to;
   }
 
   $sql = "SELECT * FROM care_reminders";
-  if ($where) {
-    $sql .= " WHERE ".implode(" AND ",$where);
-  }
-  $sql .= " ORDER BY remind_date ASC, reminder_id ASC";
+  if ($where) $sql .= " WHERE " . implode(" AND ", $where);
+  $sql .= " ORDER BY reminder_date ASC, reminder_id ASC";
 
   $st = $dbh->prepare($sql);
   $st->execute($params);
-  json_ok($st->fetchAll());
+  json_ok($st->fetchAll(PDO::FETCH_ASSOC));
+
 } catch (Throwable $e) {
   json_err("DB_ERROR","db_error",500);
 }

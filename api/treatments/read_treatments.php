@@ -1,17 +1,22 @@
 <?php
 require_once __DIR__ . '/../db.php';
-require_admin();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') json_err("METHOD_NOT_ALLOWED", "get_only", 405);
 
-$disease_id = trim($_GET['disease_id'] ?? '');
-$level_code = strtolower(trim($_GET['level_code'] ?? ''));
-$q          = trim($_GET['q'] ?? '');
+$risk_level_id = trim($_GET['risk_level_id'] ?? '');
+$disease_id    = trim($_GET['disease_id'] ?? '');
+$level_code    = strtolower(trim($_GET['level_code'] ?? ''));
+$q             = trim($_GET['q'] ?? '');
 
 $allowedLevels = ['low','medium','high'];
 $where = [];
 $params = [];
 
+if ($risk_level_id !== '') {
+  if (!ctype_digit((string)$risk_level_id)) json_err("VALIDATION_ERROR", "invalid_risk_level_id", 400);
+  $where[] = "t.risk_level_id = ?";
+  $params[] = (int)$risk_level_id;
+}
 if ($disease_id !== '') {
   if (!ctype_digit((string)$disease_id)) json_err("VALIDATION_ERROR", "invalid_disease_id", 400);
   $where[] = "rl.disease_id = ?";
@@ -36,7 +41,6 @@ $sql = "
   JOIN disease_risk_levels rl ON rl.risk_level_id = t.risk_level_id
   JOIN diseases d ON d.disease_id = rl.disease_id
 ";
-
 if ($where) $sql .= " WHERE " . implode(" AND ", $where);
 
 $sql .= "

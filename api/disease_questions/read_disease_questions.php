@@ -1,8 +1,10 @@
 <?php
 require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../auth/require_auth.php'; // ✅ app ส่ง Bearer token ได้
 
 try {
-  require_admin();
+  // ✅ แค่อยู่ในระบบก็อ่านได้ ไม่ต้องเป็นแอดมิน
+  // $AUTH_USER = require_auth(); (ถูกเรียกใน require_auth.php แล้ว)
 
   $disease_id = $_GET['disease_id'] ?? null;
 
@@ -17,6 +19,7 @@ try {
       d.disease_en,
       qn.question_text,
       qn.question_type,
+      qn.max_score,
       qn.sort_order AS question_sort_order
     FROM disease_questions dq
     LEFT JOIN diseases d ON d.disease_id = dq.disease_id
@@ -36,13 +39,12 @@ try {
 
   if ($where) $sql .= " WHERE " . implode(" AND ", $where);
 
-  $sql .= " ORDER BY dq.disease_id ASC, dq.sort_order ASC, qn.sort_order ASC, dq.disease_question_id ASC";
+  $sql .= " ORDER BY dq.sort_order ASC, qn.sort_order ASC, dq.disease_question_id ASC";
 
   $st = $pdo->prepare($sql);
   $st->execute($params);
 
   json_ok($st->fetchAll(PDO::FETCH_ASSOC));
 } catch (Throwable $e) {
-  // ✅ ถ้าอยากเห็นสาเหตุจริงชั่วคราว ให้เปลี่ยนเป็น: json_err("DB_ERROR", $e->getMessage(), 500);
   json_err("DB_ERROR", "db_error", 500);
 }

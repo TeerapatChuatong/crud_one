@@ -1,6 +1,6 @@
 <?php
 require_once __DIR__ . '/../db.php';
-require_admin();
+require_once __DIR__ . '/../auth/require_auth.php'; // ✅ ให้แอปอ่านได้
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
   json_err('METHOD_NOT_ALLOWED', 'get_only', 405);
@@ -25,18 +25,12 @@ try {
       q.question_type,
       q.max_score,
       q.sort_order,
-      {$isActiveSelect},
-      (SELECT dq.disease_id FROM disease_questions dq WHERE dq.question_id = q.question_id ORDER BY dq.disease_id LIMIT 1) AS disease_id,
-      (SELECT d.disease_th FROM diseases d WHERE d.disease_id = (
-        SELECT dq2.disease_id FROM disease_questions dq2 WHERE dq2.question_id = q.question_id ORDER BY dq2.disease_id LIMIT 1
-      )) AS disease_name
+      {$isActiveSelect}
     FROM questions q
-    ORDER BY q.question_id ASC"
+    ORDER BY q.sort_order ASC, q.question_id ASC"
   );
   $stmt->execute();
-  $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-  echo json_encode($data, JSON_UNESCAPED_UNICODE);
+  json_ok($stmt->fetchAll(PDO::FETCH_ASSOC));
 } catch (Throwable $e) {
-  json_err('DB_ERROR', $e->getMessage(), 500);
+  json_err('DB_ERROR', 'db_error', 500);
 }
