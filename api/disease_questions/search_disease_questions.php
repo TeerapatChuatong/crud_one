@@ -6,9 +6,18 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
   json_err("METHOD_NOT_ALLOWED", "get_only", 405);
 }
 
-$disease_id  = trim($_GET['disease_id']  ?? '');
-$question_id = trim($_GET['question_id'] ?? '');
-$q           = trim($_GET['q']           ?? '');
+function enum_param(string $key, array $allowed): ?string {
+  if (!isset($_GET[$key]) || $_GET[$key] === '') return null;
+  $v = trim((string)$_GET[$key]);
+  if (!in_array($v, $allowed, true)) json_err("VALIDATION_ERROR", "invalid_$key", 400);
+  return $v;
+}
+
+$disease_id   = trim($_GET['disease_id']  ?? '');
+$question_id  = trim($_GET['question_id'] ?? '');
+$q            = trim($_GET['q']           ?? '');
+$answer_scope = enum_param('answer_scope', ['scan','profile']);
+$purpose      = enum_param('purpose', ['severity','recommendation']);
 
 try {
   $sql = "
@@ -22,6 +31,9 @@ try {
       d.disease_en,
       qn.question_text,
       qn.question_type,
+      qn.max_score,
+      qn.purpose,
+      qn.answer_scope,
       qn.sort_order AS question_sort_order
     FROM disease_questions dq
     LEFT JOIN diseases d ON d.disease_id = dq.disease_id
@@ -50,6 +62,16 @@ try {
     $params[] = "%{$q}%";
   }
 
+  if ($answer_scope) {
+    $where[]  = "qn.answer_scope = ?";
+    $params[] = $answer_scope;
+  }
+
+  if ($purpose) {
+    $where[]  = "qn.purpose = ?";
+    $params[] = $purpose;
+  }
+
   if ($where) $sql .= " WHERE " . implode(" AND ", $where);
 
   $sql .= " ORDER BY dq.disease_id ASC, dq.sort_order ASC, qn.sort_order ASC, dq.disease_question_id ASC";
@@ -59,5 +81,5 @@ try {
 
   json_ok($st->fetchAll(PDO::FETCH_ASSOC));
 } catch (Throwable $e) {
-  json_err("DB_ERROR", "db_error", 500);
+  json_err("DB_ERROR", $e->getMessage(), 500);
 }

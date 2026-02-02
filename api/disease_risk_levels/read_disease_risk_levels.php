@@ -34,7 +34,10 @@ try {
         level_code,
         min_score,
         COALESCE(days,0)  AS days,
-        COALESCE(times,0) AS times
+        COALESCE(times,0) AS times,
+        COALESCE(sprays_per_product,2)     AS sprays_per_product,
+        COALESCE(max_products_per_group,2) AS max_products_per_group,
+        COALESCE(max_sprays_per_group,2)   AS max_sprays_per_group
       FROM disease_risk_levels
       WHERE risk_level_id=?
       LIMIT 1
@@ -44,7 +47,7 @@ try {
     if (!$row) json_err("NOT_FOUND","risk_level_not_found",404);
 
     $row['level_name_th'] = level_name_th($row['level_code']);
-    // aliases (เผื่อฝั่งแอป/หน้าอื่นเรียกหลายชื่อ)
+    // aliases
     $row['code'] = $row['level_code'];
     $row['name'] = $row['level_name_th'];
     $row['level_name'] = $row['level_name_th'];
@@ -66,7 +69,10 @@ try {
         level_code,
         min_score,
         COALESCE(days,0)  AS days,
-        COALESCE(times,0) AS times
+        COALESCE(times,0) AS times,
+        COALESCE(sprays_per_product,2)     AS sprays_per_product,
+        COALESCE(max_products_per_group,2) AS max_products_per_group,
+        COALESCE(max_sprays_per_group,2)   AS max_sprays_per_group
       FROM disease_risk_levels
       WHERE disease_id=? AND min_score<=?
       ORDER BY min_score DESC, FIELD(level_code,'low','medium','high') DESC
@@ -74,8 +80,8 @@ try {
     ");
     $st->execute([(int)$disease_id, (int)$score]);
     $row = $st->fetch(PDO::FETCH_ASSOC);
+
     if (!$row) {
-      // fallback → เอาระดับต่ำสุด
       $st2 = $dbh->prepare("
         SELECT
           risk_level_id AS id,
@@ -84,7 +90,10 @@ try {
           level_code,
           min_score,
           COALESCE(days,0)  AS days,
-          COALESCE(times,0) AS times
+          COALESCE(times,0) AS times,
+          COALESCE(sprays_per_product,2)     AS sprays_per_product,
+          COALESCE(max_products_per_group,2) AS max_products_per_group,
+          COALESCE(max_sprays_per_group,2)   AS max_sprays_per_group
         FROM disease_risk_levels
         WHERE disease_id=?
         ORDER BY min_score ASC, FIELD(level_code,'low','medium','high') ASC
@@ -104,7 +113,7 @@ try {
     json_ok($row);
   }
 
-  // 3) Read list (by disease_id / level_code optional)
+  // 3) Read list
   $where = [];
   $params = [];
 
@@ -128,7 +137,10 @@ try {
       level_code,
       min_score,
       COALESCE(days,0)  AS days,
-      COALESCE(times,0) AS times
+      COALESCE(times,0) AS times,
+      COALESCE(sprays_per_product,2)     AS sprays_per_product,
+      COALESCE(max_products_per_group,2) AS max_products_per_group,
+      COALESCE(max_sprays_per_group,2)   AS max_sprays_per_group
     FROM disease_risk_levels
   ";
   if ($where) $sql .= " WHERE " . implode(" AND ", $where);

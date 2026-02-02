@@ -2,108 +2,166 @@
 require_once __DIR__ . '/../db.php';
 require_admin();
 
-// รองรับ PATCH เป็นหลัก แต่กันพลาดให้ POST ใช้ได้ด้วย
-$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-if (!in_array($method, ['PATCH','POST'], true)) {
-  json_err('METHOD_NOT_ALLOWED', 'patch_or_post_only', 405);
+if ($_SERVER['REQUEST_METHOD'] !== 'PATCH' && $_SERVER['REQUEST_METHOD'] !== 'POST') {
+  json_err('METHOD_NOT_ALLOWED', 'patch_only', 405);
 }
 
-$body = json_decode(file_get_contents('php://input'), true);
+$raw = file_get_contents('php://input');
+$body = json_decode($raw, true);
 if (!is_array($body)) $body = [];
 
+// ---- Inputs ----
 $treatment_id = $body['treatment_id'] ?? null;
+
+// รับได้ทั้ง risk_level_id (เลข) หรือ disease_id + level_code
+$risk_level_id_raw = $body['risk_level_id'] ?? null;
+$disease_id_raw    = $body['disease_id'] ?? null;
+
+$level_code = strtolower(trim((string)($body['level_code'] ?? '')));
+
+// รองรับกรณี frontend เผลอส่ง "ปานกลาง" หรือส่ง level ไปอยู่ใน risk_level_id
+$level_th_map = [
+  'ต่ำ' => 'low', 'น้อย' => 'low',
+  'ปานกลาง' => 'medium', 'กลาง' => 'medium',
+  'มาก' => 'high', 'รุนแรง' => 'high', 'สูง' => 'high',
+];
+if ($level_code === '' && is_string($risk_level_id_raw)) {
+  $tmp = strtolower(trim($risk_level_id_raw));
+  if (isset($level_th_map[$tmp])) $level_code = $level_th_map[$tmp];
+  if (in_array($tmp, ['low','medium','high'], true)) $level_code = $tmp;
+}
+
+$advice_text = trim((string)($body['advice_text'] ?? ''));
+
 if ($treatment_id === null || !ctype_digit((string)$treatment_id)) {
   json_err('VALIDATION_ERROR', 'invalid_treatment_id', 400);
 }
-$treatment_id = (int)$treatment_id;
-
-// ฟิลด์ที่อนุญาตให้อัปเดต
-$hasAdvice = array_key_exists('advice_text', $body);
-$hasMin   = array_key_exists('min_score', $body);
-$hasDays  = array_key_exists('days', $body);
-$hasTimes = array_key_exists('times', $body);
-
-if (!$hasAdvice && !$hasMin && !$hasDays && !$hasTimes) {
-  json_err('VALIDATION_ERROR', 'no_fields_to_update', 400);
+if ($advice_text === '') {
+  json_err('VALIDATION_ERROR', 'advice_text_required', 400);
 }
 
-$advice_text = null;
-if ($hasAdvice) {
-  $advice_text = trim((string)($body['advice_text'] ?? ''));
-  if ($advice_text === '') json_err('VALIDATION_ERROR', 'advice_text_required', 400);
+$min_raw = $body['min_score'] ?? null;
+if ($min_raw === null || $min_raw === '' || !is_numeric($min_raw)) {
+  json_err('VALIDATION_ERROR', 'invalid_min_score', 400);
 }
+$min_score = (int)$min_raw;
 
-$min_score = null;
-if ($hasMin) {
-  $min_raw = $body['min_score'];
-  if ($min_raw === '' || $min_raw === null || !is_numeric($min_raw)) {
-    json_err('VALIDATION_ERROR', 'invalid_min_score', 400);
-  }
-  $min_score = (int)$min_raw;
-}
+$days_raw = $body['days'] ?? 0;
+$times_raw = $body['times'] ?? 0;
 
-$days = null;
-if ($hasDays) {
-  $days_raw = $body['days'];
-  if ($days_raw === '' || $days_raw === null) $days = null;
-  else {
-    if (!is_numeric($days_raw)) json_err('VALIDATION_ERROR', 'invalid_days', 400);
-    $days = (int)$days_raw;
+if (!is_numeric($days_raw)) json_err('VALIDATION_ERROR', 'invalid_days', 400);
+if (!is_numeric($times_raw)) json_err('VALIDATION_ERROR', 'invalid_times', 400);
+
+$days = (int)$days_raw;
+$times = (int)$times_raw;
+
+// helper: parse int from "12" only
+$parsed_risk_level_id = null;
+if ($risk_level_id_raw !== null) {
+  if (is_int($risk_level_id_raw) || (is_string($risk_level_id_raw) && ctype_digit(trim($risk_level_id_raw)))) {
+    $parsed_risk_level_id = (int)$risk_level_id_raw;
+  } elseif (is_string($risk_level_id_raw)) {
+    // ถ้าเป็น "id: 12" หรือ "12 (medium)" ให้ดึงเลขออก
+    if (preg_match('/\b(\d+)\b/', $risk_level_id_raw, $m)) {
+      $parsed_risk_level_id = (int)$m[1];
+    }
   }
 }
 
-$times = null;
-if ($hasTimes) {
-  $times_raw = $body['times'];
-  if ($times_raw === '' || $times_raw === null) $times = null;
-  else {
-    if (!is_numeric($times_raw)) json_err('VALIDATION_ERROR', 'invalid_times', 400);
-    $times = (int)$times_raw;
-  }
-}
+$allowedLevels = ['low','medium','high'];
 
 try {
   $dbh->beginTransaction();
 
-  // หา risk_level_id ของ treatment ที่จะแก้
-  $st = $dbh->prepare('SELECT risk_level_id FROM treatments WHERE treatment_id=? LIMIT 1');
-  $st->execute([$treatment_id]);
-  $row = $st->fetch(PDO::FETCH_ASSOC);
-  if (!$row) json_err('NOT_FOUND', 'treatment_not_found', 404);
-  $risk_level_id = (int)$row['risk_level_id'];
+  // 1) load current treatment + current risk level
+  $stCur = $dbh->prepare("
+    SELECT
+      t.treatment_id,
+      t.risk_level_id AS current_risk_level_id,
+      rl.disease_id  AS current_disease_id,
+      rl.level_code  AS current_level_code
+    FROM treatments t
+    JOIN disease_risk_levels rl ON rl.risk_level_id = t.risk_level_id
+    WHERE t.treatment_id = ?
+    LIMIT 1
+  ");
+  $stCur->execute([(int)$treatment_id]);
+  $cur = $stCur->fetch(PDO::FETCH_ASSOC);
 
-  // อัปเดตคำแนะนำ
-  if ($hasAdvice) {
-    $st2 = $dbh->prepare('UPDATE treatments SET advice_text=? WHERE treatment_id=?');
-    $st2->execute([$advice_text, $treatment_id]);
+  if (!$cur) {
+    $dbh->rollBack();
+    json_err('NOT_FOUND', 'treatment_not_found', 404);
   }
 
-  // ✅ อัปเดตเกณฑ์ระดับเสมอ (ไม่ต้องมีติ๊กแล้ว)
-  $set = [];
-  $params = [];
+  $target_risk_level_id = (int)$cur['current_risk_level_id'];
 
-  if ($hasMin) {
-    $set[] = 'min_score=?';
-    $params[] = $min_score;
-  }
-  if ($hasDays) {
-    $set[] = 'days=?';
-    $params[] = $days;
-  }
-  if ($hasTimes) {
-    $set[] = 'times=?';
-    $params[] = $times;
+  // 2) determine target risk_level_id
+  if ($parsed_risk_level_id !== null) {
+    // verify exists
+    $stV = $dbh->prepare("SELECT risk_level_id FROM disease_risk_levels WHERE risk_level_id=? LIMIT 1");
+    $stV->execute([$parsed_risk_level_id]);
+    $v = $stV->fetch(PDO::FETCH_ASSOC);
+    if (!$v) {
+      $dbh->rollBack();
+      json_err('VALIDATION_ERROR', 'invalid_risk_level_id', 400);
+    }
+    $target_risk_level_id = (int)$parsed_risk_level_id;
+
+  } else {
+    // ถ้ามี disease_id + level_code ให้หา risk_level_id ตามคู่นี้
+    $disease_id = null;
+    if ($disease_id_raw !== null && ctype_digit((string)$disease_id_raw)) {
+      $disease_id = (int)$disease_id_raw;
+    }
+
+    if ($disease_id !== null && $level_code !== '') {
+      if (!in_array($level_code, $allowedLevels, true)) {
+        $dbh->rollBack();
+        json_err('VALIDATION_ERROR', 'invalid_level_code', 400);
+      }
+
+      $stFind = $dbh->prepare("SELECT risk_level_id FROM disease_risk_levels WHERE disease_id=? AND level_code=? LIMIT 1");
+      $stFind->execute([$disease_id, $level_code]);
+      $found = $stFind->fetch(PDO::FETCH_ASSOC);
+
+      if ($found) {
+        $target_risk_level_id = (int)$found['risk_level_id'];
+      } else {
+        // ถ้าไม่มี risk level นี้ในตาราง -> สร้างใหม่ (ให้สอดคล้องกับ create_treatments.php)
+        $stIns = $dbh->prepare("
+          INSERT INTO disease_risk_levels (disease_id, level_code, min_score, days, times)
+          VALUES (?, ?, ?, ?, ?)
+        ");
+        $stIns->execute([$disease_id, $level_code, $min_score, $days, $times]);
+        $target_risk_level_id = (int)$dbh->lastInsertId();
+      }
+    }
+    // ถ้าไม่ได้ส่งอะไรมาเลย -> ใช้ current_risk_level_id (ปล่อยผ่านให้แก้ advice/min/days/times ได้)
   }
 
-  if ($set) {
-    $params[] = $risk_level_id;
-    $sql = 'UPDATE disease_risk_levels SET ' . implode(', ', $set) . ' WHERE risk_level_id=?';
-    $st3 = $dbh->prepare($sql);
-    $st3->execute($params);
+  // 3) ถ้าเปลี่ยน risk_level_id ต้องกันชน UNIQUE (1 risk level มีได้ 1 treatment)
+  if ($target_risk_level_id !== (int)$cur['current_risk_level_id']) {
+    $stDup = $dbh->prepare("SELECT treatment_id FROM treatments WHERE risk_level_id=? AND treatment_id<>? LIMIT 1");
+    $stDup->execute([$target_risk_level_id, (int)$treatment_id]);
+    if ($stDup->fetch(PDO::FETCH_ASSOC)) {
+      $dbh->rollBack();
+      json_err('DUPLICATE', 'โรค+ระดับนี้มีคำแนะนำอยู่แล้ว (ไม่สามารถแก้ไปซ้ำได้)', 409);
+    }
+
+    $stMove = $dbh->prepare("UPDATE treatments SET risk_level_id=? WHERE treatment_id=?");
+    $stMove->execute([$target_risk_level_id, (int)$treatment_id]);
   }
 
-  // ส่งข้อมูลล่าสุดกลับ
-  $st4 = $dbh->prepare("
+  // 4) update risk level threshold + schedule
+  $st1 = $dbh->prepare('UPDATE disease_risk_levels SET min_score=?, days=?, times=? WHERE risk_level_id=?');
+  $st1->execute([$min_score, $days, $times, $target_risk_level_id]);
+
+  // 5) update advice
+  $st2 = $dbh->prepare('UPDATE treatments SET advice_text=? WHERE treatment_id=?');
+  $st2->execute([$advice_text, (int)$treatment_id]);
+
+  // 6) return updated row
+  $st3 = $dbh->prepare("
     SELECT
       t.treatment_id, t.risk_level_id, t.advice_text, t.created_at,
       rl.disease_id, rl.level_code, rl.min_score, rl.days, rl.times,
@@ -111,14 +169,14 @@ try {
     FROM treatments t
     JOIN disease_risk_levels rl ON rl.risk_level_id = t.risk_level_id
     JOIN diseases d ON d.disease_id = rl.disease_id
-    WHERE t.treatment_id = ?
+    WHERE t.treatment_id=?
     LIMIT 1
   ");
-  $st4->execute([$treatment_id]);
-  $out = $st4->fetch(PDO::FETCH_ASSOC);
+  $st3->execute([(int)$treatment_id]);
+  $row = $st3->fetch(PDO::FETCH_ASSOC);
 
   $dbh->commit();
-  json_ok($out ?: true);
+  json_ok($row ?: true);
 
 } catch (Throwable $e) {
   if ($dbh->inTransaction()) $dbh->rollBack();

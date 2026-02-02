@@ -7,9 +7,14 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 }
 
 $disease_id = trim((string)($_GET['disease_id'] ?? ''));
-$level_code = trim((string)($_GET['level_code'] ?? '')); // low/medium/high
-$min_score  = trim((string)($_GET['min_score'] ?? ''));  // filter >=
-$days       = trim((string)($_GET['days'] ?? ''));       // filter =
+$level_code = trim((string)($_GET['level_code'] ?? ''));
+$min_score  = trim((string)($_GET['min_score'] ?? ''));
+$days       = trim((string)($_GET['days'] ?? ''));
+$times      = trim((string)($_GET['times'] ?? ''));
+$sprays_per_product     = trim((string)($_GET['sprays_per_product'] ?? ''));
+$max_products_per_group = trim((string)($_GET['max_products_per_group'] ?? ''));
+/* ✅ เพิ่ม */
+$max_sprays_per_group   = trim((string)($_GET['max_sprays_per_group'] ?? ''));
 
 try {
   $sql = "
@@ -19,7 +24,11 @@ try {
       disease_id,
       level_code,
       min_score,
-      days
+      days,
+      times,
+      sprays_per_product,
+      max_products_per_group,
+      max_sprays_per_group
     FROM disease_risk_levels
   ";
   $where  = [];
@@ -43,6 +52,27 @@ try {
     if (!ctype_digit($days)) json_err("VALIDATION_ERROR", "invalid_days", 400);
     $where[]  = "days = ?";
     $params[] = (int)$days;
+  }
+  if ($times !== '') {
+    if (!ctype_digit($times)) json_err("VALIDATION_ERROR", "invalid_times", 400);
+    $where[]  = "times = ?";
+    $params[] = (int)$times;
+  }
+  if ($sprays_per_product !== '') {
+    if (!ctype_digit($sprays_per_product)) json_err("VALIDATION_ERROR", "invalid_sprays_per_product", 400);
+    $where[]  = "sprays_per_product = ?";
+    $params[] = (int)$sprays_per_product;
+  }
+  if ($max_products_per_group !== '') {
+    if (!ctype_digit($max_products_per_group)) json_err("VALIDATION_ERROR", "invalid_max_products_per_group", 400);
+    $where[]  = "max_products_per_group = ?";
+    $params[] = (int)$max_products_per_group;
+  }
+  /* ✅ เพิ่ม filter */
+  if ($max_sprays_per_group !== '') {
+    if (!ctype_digit($max_sprays_per_group)) json_err("VALIDATION_ERROR", "invalid_max_sprays_per_group", 400);
+    $where[]  = "max_sprays_per_group = ?";
+    $params[] = (int)$max_sprays_per_group;
   }
 
   if ($where) $sql .= " WHERE " . implode(" AND ", $where);

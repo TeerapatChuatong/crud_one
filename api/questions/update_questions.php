@@ -1,109 +1,236 @@
 <?php
 require_once __DIR__ . '/../db.php';
+require_admin();
 
-// รองรับ PATCH/POST (บาง client ส่ง POST)
-$method = strtoupper($_SERVER['REQUEST_METHOD'] ?? '');
-if (!in_array($method, ['PATCH', 'POST'], true)) {
-  json_err('METHOD_NOT_ALLOWED', 'patch_only', 405);
+/*
+  สำคัญมาก:
+  - PHP "ไม่ parse" multipart/form-data เมื่อ method เป็น PATCH/PUT
+  - ดังนั้นไฟล์นี้รองรับ:
+      1) POST  => สำหรับ FormData + ไฟล์ (แนะนำ)
+      2) PATCH => สำหรับ JSON (ไม่มีไฟล์)
+*/
+
+$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+if (!in_array($method, ['POST', 'PATCH'], true)) {
+  json_err("METHOD_NOT_ALLOWED", "post_or_patch_only", 405);
 }
 
 function has_column(PDO $pdo, string $table, string $col): bool {
   $st = $pdo->prepare(
-    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?"
+    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?"
   );
   $st->execute([$table, $col]);
   return ((int)$st->fetchColumn()) > 0;
 }
 
+function normalize_answer_source($v) {
+  $s = strtolower(trim((string)($v ?? 'manual')));
+  if ($s === 'chemical') $s = 'chemicals';
+  if (!in_array($s, ['manual','chemicals'], true)) $s = 'manual';
+  return $s;
+}
+
+function str_field_nullable($v) {
+  if ($v === null) return null;
+  $s = trim((string)$v);
+  return ($s === '') ? null : $s;
+}
+function str_field_req($v, $name, $minLen = 1) {
+  $s = trim((string)($v ?? ''));
+  if (mb_strlen($s) < $minLen) json_err("VALIDATION_ERROR", "{$name}_required", 422);
+  return $s;
+}
+function int_field_nullable($v, $name, $min = 0) {
+  if ($v === null || $v === '') return null;
+  $s = trim((string)$v);
+  if (!preg_match('/^\d+$/', $s)) json_err("VALIDATION_ERROR", "{$name}_must_be_int", 422);
+  $n = (int)$s;
+  if ($n < $min) json_err("VALIDATION_ERROR", "{$name}_min_{$min}", 422);
+  return $n;
+}
+function int_field($v, $name, $min = 0) {
+  $n = int_field_nullable($v, $name, $min);
+  if ($n === null) json_err("VALIDATION_ERROR", "{$name}_required", 422);
+  return $n;
+}
+function has_file($key) {
+  return isset($_FILES[$key]) && is_array($_FILES[$key]) && ($_FILES[$key]['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
+}
+function upload_image($fileKey, $subDir) {
+  if (!has_file($fileKey)) return null;
+
+  $f = $_FILES[$fileKey];
+  if (($f['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) {
+    json_err("UPLOAD_ERROR", "upload_failed", 400);
+  }
+
+  $maxBytes = 6 * 1024 * 1024; // 6MB
+  if (($f['size'] ?? 0) > $maxBytes) {
+    json_err("UPLOAD_ERROR", "file_too_large", 400);
+  }
+
+  $orig = $f['name'] ?? 'file';
+  $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+  $allow = ['jpg','jpeg','png','webp'];
+  if (!in_array($ext, $allow, true)) {
+    json_err("UPLOAD_ERROR", "invalid_file_type", 400);
+  }
+
+  $fsDir = realpath(__DIR__ . '/../../uploads');
+  if ($fsDir === false) {
+    $base = __DIR__ . '/../../uploads';
+    if (!is_dir($base)) mkdir($base, 0775, true);
+    $fsDir = realpath($base);
+  }
+  $targetDir = rtrim($fsDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $subDir;
+  if (!is_dir($targetDir)) mkdir($targetDir, 0775, true);
+
+  $safe = preg_replace('/[^a-zA-Z0-9_\-]/', '_', pathinfo($orig, PATHINFO_FILENAME));
+  $name = $safe . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+
+  $dest = $targetDir . DIRECTORY_SEPARATOR . $name;
+  if (!move_uploaded_file($f['tmp_name'], $dest)) {
+    json_err("UPLOAD_ERROR", "move_failed", 500);
+  }
+
+  // public path: /crud/uploads/question_images/xxx.jpg
+  $script = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
+  $root = preg_replace('~/api/.*$~', '', $script); // -> /crud
+  $root = rtrim($root, '/');
+  return $root . '/uploads/' . $subDir . '/' . $name;
+}
+
+// --------------------
+// Parse input
+// --------------------
+$contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+$raw = file_get_contents('php://input');
+
+$body = [];
+if ($method === 'PATCH') {
+  // PATCH: แนะนำให้ส่ง JSON เท่านั้น
+  $tmp = json_decode($raw, true);
+  if (is_array($tmp)) $body = $tmp;
+} else {
+  // POST: รองรับ FormData + JSON
+  if (stripos($contentType, 'application/json') !== false) {
+    $tmp = json_decode($raw, true);
+    if (is_array($tmp)) $body = $tmp;
+  } else {
+    $body = $_POST ?? [];
+    if (empty($body)) {
+      $tmp = json_decode($raw, true);
+      if (is_array($tmp)) $body = $tmp;
+    }
+  }
+}
+
+$question_id    = int_field($body['question_id'] ?? null, "question_id", 1);
+$disease_id     = int_field_nullable($body['disease_id'] ?? null, "disease_id", 0);
+
+$question_text  = str_field_nullable($body['question_text'] ?? null);
+$question_type  = str_field_nullable($body['question_type'] ?? null);
+
+// ✅ ใหม่: answer_source (manual|chemicals) ตั้งค่าแบบถาวรต่อคำถาม
+$answer_source = null;
+if (array_key_exists('answer_source', $body)) {
+  $answer_source = normalize_answer_source($body['answer_source']);
+  // ถ้าเลือก chemicals ให้บังคับ question_type เป็น multi
+  if ($answer_source === 'chemicals') $question_type = 'multi';
+}
+
+$max_score      = int_field_nullable($body['max_score'] ?? null, "max_score", 0);
+$sort_order     = int_field_nullable($body['sort_order'] ?? ($body['order_no'] ?? null), "sort_order", 0);
+
+// รูป: example_image / image_url / file
+$image_url = str_field_nullable($body['image_url'] ?? ($body['example_image'] ?? null));
+
+// POST multipart: ถ้ามีไฟล์ ให้อัปโหลดทับ
+if ($method === 'POST') {
+  $fileUrl = upload_image('example_image_file', 'question_images');
+  if ($fileUrl) $image_url = $fileUrl;
+}
+
+$allowTypes = ['yes_no','numeric','multi'];
+if ($question_type !== null && !in_array($question_type, $allowTypes, true)) {
+  json_err("VALIDATION_ERROR", "invalid_question_type", 422);
+}
+
 try {
-  require_admin();
-
-  $raw = file_get_contents('php://input');
-  $data = json_decode($raw, true);
-  if (!is_array($data)) {
-    json_err('BAD_JSON', 'invalid_json', 400);
-  }
-
-  $question_id = isset($data['question_id']) ? (int)$data['question_id'] : 0;
-  $disease_id = isset($data['disease_id']) ? (int)$data['disease_id'] : 0;
-
-  if ($question_id <= 0) json_err('VALIDATION_ERROR', 'question_id_required', 400);
-  if ($disease_id <= 0) json_err('VALIDATION_ERROR', 'disease_id_required', 400);
-
-  $has_is_active = has_column($pdo, 'questions', 'is_active');
-
-  // --- build update fields dynamically ---
-  $set = [];
-  $params = [':question_id' => $question_id];
-
-  if (array_key_exists('question_text', $data)) {
-    $text = trim((string)$data['question_text']);
-    if ($text === '') json_err('VALIDATION_ERROR', 'question_text_required', 400);
-    $set[] = "question_text = :question_text";
-    $params[':question_text'] = $text;
-  }
-  if (array_key_exists('question_type', $data)) {
-    $type = trim((string)$data['question_type']);
-    if ($type === '') json_err('VALIDATION_ERROR', 'question_type_required', 400);
-    $set[] = "question_type = :question_type";
-    $params[':question_type'] = $type;
-  }
-  if (array_key_exists('max_score', $data)) {
-    $ms = (int)$data['max_score'];
-    if ($ms <= 0) json_err('VALIDATION_ERROR', 'max_score_required', 400);
-    $set[] = "max_score = :max_score";
-    $params[':max_score'] = $ms;
-  }
-
-  // sort_order (ทั้งใน questions และ pivot)
-  $pivotSort = null;
-  if (array_key_exists('sort_order', $data) || array_key_exists('order_no', $data)) {
-    $pivotSort = array_key_exists('sort_order', $data) ? (int)$data['sort_order'] : (int)$data['order_no'];
-    if ($pivotSort < 0) $pivotSort = 0;
-    $set[] = "sort_order = :sort_order";
-    $params[':sort_order'] = $pivotSort;
-  }
-
-  if ($has_is_active && array_key_exists('is_active', $data)) {
-    $ia = (int)$data['is_active'];
-    $ia = ($ia === 1) ? 1 : 0;
-    $set[] = "is_active = :is_active";
-    $params[':is_active'] = $ia;
-  }
-
   $pdo->beginTransaction();
 
-  // ensure exists
-  $chk = $pdo->prepare("SELECT question_id FROM questions WHERE question_id = :id");
-  $chk->execute([':id' => $question_id]);
+  $has_answer_source = has_column($pdo, 'questions', 'answer_source');
+
+  // check exists
+  $chk = $pdo->prepare("SELECT question_id FROM questions WHERE question_id = ? LIMIT 1");
+  $chk->execute([$question_id]);
   if (!$chk->fetchColumn()) {
     $pdo->rollBack();
-    json_err('NOT_FOUND', 'question_not_found', 404);
+    json_err("NOT_FOUND", "question_not_found", 404);
   }
 
-  if (count($set) > 0) {
-    $sql = "UPDATE questions SET " . implode(', ', $set) . " WHERE question_id = :question_id";
-    $upd = $pdo->prepare($sql);
-    $upd->execute($params);
+  $setMap = [];
+  $vals   = [];
+
+  if ($question_text !== null) { $setMap['question_text'] = $question_text; }
+  if ($question_type !== null) { $setMap['question_type'] = $question_type; }
+  if ($max_score !== null)     { $setMap['max_score']     = (int)$max_score; }
+  if ($sort_order !== null)    { $setMap['sort_order']    = (int)$sort_order; }
+  if ($image_url !== null)     { $setMap['image_url']     = ($image_url !== '' ? $image_url : null); }
+
+  // ✅ ใหม่: answer_source (ถ้ามีคอลัมน์ และมีการส่งค่าเข้ามา)
+  if ($has_answer_source && $answer_source !== null) {
+    $setMap['answer_source'] = $answer_source;
+
+    // ถ้าเป็น chemicals ให้บังคับ question_type เป็น multi เสมอ
+    if ($answer_source === 'chemicals') {
+      $setMap['question_type'] = 'multi';
+    }
   }
 
-  // update pivot disease_questions (ย้ายโรค / เปลี่ยนลำดับ)
-  $pdo->prepare("DELETE FROM disease_questions WHERE question_id = :qid")
-      ->execute([':qid' => $question_id]);
+  $fields = [];
+  foreach ($setMap as $k => $v) {
+    $fields[] = "{$k} = ?";
+    $vals[] = $v;
+  }
 
-  $ins = $pdo->prepare(
-    "INSERT INTO disease_questions (disease_id, question_id, sort_order) VALUES (:disease_id, :question_id, :sort_order)"
-  );
-  $ins->execute([
-    ':disease_id' => $disease_id,
-    ':question_id' => $question_id,
-    ':sort_order' => $pivotSort ?? 0,
-  ]);
+  if (!empty($fields)) {
+    $vals[] = $question_id;
+    $sql = "UPDATE questions SET " . implode(", ", $fields) . " WHERE question_id = ?";
+    $up = $pdo->prepare($sql);
+    $up->execute($vals);
+  }
+
+  // pivot: ถ้าส่ง disease_id มา ให้จัด mapping แบบ 1 โรค/1 คำถาม (ตาม UI dropdown)
+  if ($disease_id !== null) {
+    // ลบ mapping เดิมทั้งหมด
+    $del = $pdo->prepare("DELETE FROM disease_questions WHERE question_id = ?");
+    $del->execute([$question_id]);
+
+    // ถ้า disease_id > 0 ให้เพิ่มใหม่
+    if ((int)$disease_id > 0) {
+      $ins = $pdo->prepare("
+        INSERT INTO disease_questions (disease_id, question_id)
+        VALUES (?, ?)
+      ");
+      $ins->execute([(int)$disease_id, $question_id]);
+    }
+  }
+
+  $outSelect = $has_answer_source ? "answer_source" : "'manual' AS answer_source";
+  $out = $pdo->prepare("
+    SELECT question_id, question_text, question_type, $outSelect, max_score, sort_order, image_url
+    FROM questions
+    WHERE question_id = ?
+    LIMIT 1
+  ");
+  $out->execute([$question_id]);
 
   $pdo->commit();
+  json_ok($out->fetch(PDO::FETCH_ASSOC));
 
-  echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
 } catch (Throwable $e) {
-  if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
-  json_err('DB_ERROR', $e->getMessage(), 500);
+  if ($pdo->inTransaction()) $pdo->rollBack();
+  json_err("DB_ERROR", "db_error", 500);
 }

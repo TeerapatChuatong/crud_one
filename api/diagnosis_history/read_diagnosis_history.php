@@ -6,8 +6,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
   json_err("METHOD_NOT_ALLOWED", "get_only", 405);
 }
 
-$isAdmin = is_admin();
-$session_user_id = (int)($_SESSION['user_id'] ?? 0);
+// ✅ สำคัญ: ใช้ user จาก Bearer token แทน session
+$isAdmin = (bool)($AUTH_IS_ADMIN ?? false);
+$session_user_id = (int)($AUTH_USER_ID ?? 0);
 
 $diagnosis_history_id = $_GET['diagnosis_history_id'] ?? $_GET['id'] ?? null;
 $user_id    = $_GET['user_id'] ?? null; // admin เท่านั้น
@@ -34,11 +35,45 @@ try {
         dh.*,
         d.disease_th, d.disease_en,
         ot.tree_name,
-        rl.level_code, rl.min_score, rl.days, rl.times
+        rl.level_code, rl.min_score, rl.days, rl.times,
+
+        -- ✅ ส่ง key ให้ตรงกับฝั่ง Flutter
+        COALESCE(cr.reminders_total, cr2.reminders_total, 0) AS reminder_total,
+        COALESCE(cr.reminders_done, cr2.reminders_done, 0) AS reminder_done,
+        CASE
+          WHEN (COALESCE(cr.reminders_total, cr2.reminders_total, 0)) <= 0 THEN 'no_plan'
+          WHEN (COALESCE(cr.reminders_done, cr2.reminders_done, 0)) >= (COALESCE(cr.reminders_total, cr2.reminders_total, 0)) THEN 'done'
+          ELSE 'in_progress'
+        END AS treatment_status
       FROM diagnosis_history dh
       JOIN diseases d ON d.disease_id = dh.disease_id
       JOIN orange_trees ot ON ot.tree_id = dh.tree_id
       LEFT JOIN disease_risk_levels rl ON rl.risk_level_id = dh.risk_level_id
+
+      -- ✅ นับงานจากแผนที่ผูก diagnosis_history_id (กรณีข้อมูลถูกต้อง)
+      LEFT JOIN (
+        SELECT
+          diagnosis_history_id,
+          user_id,
+          COUNT(*) AS reminders_total,
+          SUM(CASE WHEN is_done = 1 THEN 1 ELSE 0 END) AS reminders_done
+        FROM care_reminders
+        WHERE diagnosis_history_id IS NOT NULL
+        GROUP BY diagnosis_history_id, user_id
+      ) cr ON cr.diagnosis_history_id = dh.diagnosis_history_id AND cr.user_id = dh.user_id
+
+      -- ✅ fallback: ถ้า care_reminders ไม่ได้ผูก diagnosis_history_id (เป็น NULL)
+      LEFT JOIN (
+        SELECT
+          tree_id,
+          user_id,
+          COUNT(*) AS reminders_total,
+          SUM(CASE WHEN is_done = 1 THEN 1 ELSE 0 END) AS reminders_done
+        FROM care_reminders
+        WHERE diagnosis_history_id IS NULL
+        GROUP BY tree_id, user_id
+      ) cr2 ON cr2.tree_id = dh.tree_id AND cr2.user_id = dh.user_id
+
       WHERE dh.diagnosis_history_id = ?
       LIMIT 1
     ";
@@ -58,7 +93,7 @@ try {
   $where = [];
   $params = [];
 
-  // user_id: ถ้าไม่ใช่ admin ให้ล็อกไว้ที่ session
+  // user_id: ถ้าไม่ใช่ admin ให้ล็อกไว้ที่ user จาก token
   if ($isAdmin && $user_id !== null && $user_id !== '') {
     if (!ctype_digit((string)$user_id)) json_err("VALIDATION_ERROR","invalid_user_id",400);
     $where[] = "dh.user_id = ?";
@@ -73,16 +108,19 @@ try {
     $where[] = "dh.tree_id = ?";
     $params[] = (int)$tree_id;
   }
+
   if ($disease_id !== null && $disease_id !== '') {
     if (!ctype_digit((string)$disease_id)) json_err("VALIDATION_ERROR","invalid_disease_id",400);
     $where[] = "dh.disease_id = ?";
     $params[] = (int)$disease_id;
   }
+
   if ($risk_level_id !== null && $risk_level_id !== '') {
     if (!ctype_digit((string)$risk_level_id)) json_err("VALIDATION_ERROR","invalid_risk_level_id",400);
     $where[] = "dh.risk_level_id = ?";
     $params[] = (int)$risk_level_id;
   }
+
   if ($from !== '') { $where[] = "dh.diagnosed_at >= ?"; $params[] = $from; }
   if ($to !== '')   { $where[] = "dh.diagnosed_at <= ?"; $params[] = $to; }
 
@@ -91,12 +129,46 @@ try {
       dh.*,
       d.disease_th, d.disease_en,
       ot.tree_name,
-      rl.level_code, rl.min_score, rl.days, rl.times
+      rl.level_code, rl.min_score, rl.days, rl.times,
+
+      -- ✅ ส่ง key ให้ตรงกับฝั่ง Flutter
+      COALESCE(cr.reminders_total, cr2.reminders_total, 0) AS reminder_total,
+      COALESCE(cr.reminders_done, cr2.reminders_done, 0) AS reminder_done,
+      CASE
+        WHEN (COALESCE(cr.reminders_total, cr2.reminders_total, 0)) <= 0 THEN 'no_plan'
+        WHEN (COALESCE(cr.reminders_done, cr2.reminders_done, 0)) >= (COALESCE(cr.reminders_total, cr2.reminders_total, 0)) THEN 'done'
+        ELSE 'in_progress'
+      END AS treatment_status
     FROM diagnosis_history dh
     JOIN diseases d ON d.disease_id = dh.disease_id
     JOIN orange_trees ot ON ot.tree_id = dh.tree_id
     LEFT JOIN disease_risk_levels rl ON rl.risk_level_id = dh.risk_level_id
+
+    -- ✅ นับงานจากแผนที่ผูก diagnosis_history_id (กรณีข้อมูลถูกต้อง)
+    LEFT JOIN (
+      SELECT
+        diagnosis_history_id,
+        user_id,
+        COUNT(*) AS reminders_total,
+        SUM(CASE WHEN is_done = 1 THEN 1 ELSE 0 END) AS reminders_done
+      FROM care_reminders
+      WHERE diagnosis_history_id IS NOT NULL
+      GROUP BY diagnosis_history_id, user_id
+    ) cr ON cr.diagnosis_history_id = dh.diagnosis_history_id AND cr.user_id = dh.user_id
+
+    -- ✅ fallback: ถ้า care_reminders ไม่ได้ผูก diagnosis_history_id (เป็น NULL)
+    LEFT JOIN (
+      SELECT
+        tree_id,
+        user_id,
+        COUNT(*) AS reminders_total,
+        SUM(CASE WHEN is_done = 1 THEN 1 ELSE 0 END) AS reminders_done
+      FROM care_reminders
+      WHERE diagnosis_history_id IS NULL
+      GROUP BY tree_id, user_id
+    ) cr2 ON cr2.tree_id = dh.tree_id AND cr2.user_id = dh.user_id
   ";
+
   if ($where) $sql .= " WHERE " . implode(" AND ", $where);
   $sql .= " ORDER BY dh.diagnosed_at DESC, dh.diagnosis_history_id DESC LIMIT {$limit} OFFSET {$offset}";
 

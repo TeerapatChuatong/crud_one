@@ -1,151 +1,125 @@
 <?php
-require_once __DIR__ . '/../db.php';
+// CRUD/api/choices/update_choices.php
+// รองรับทั้ง JSON และ multipart/form-data (อัปโหลดรูปจากเครื่อง)
+
+header('Content-Type: application/json; charset=utf-8');
+
+$dbPath = __DIR__ . '/../db.php';
+if (!file_exists($dbPath)) $dbPath = __DIR__ . '/../../db.php';
+require_once $dbPath;
+
+require_once __DIR__ . '/../auth/require_auth.php';
 require_admin();
 
-$method = $_SERVER['REQUEST_METHOD'] ?? '';
-if (!in_array($method, ['PATCH', 'PUT', 'POST'], true)) {
-  json_err("METHOD_NOT_ALLOWED", "patch_put_post_only", 405);
+function json_ok($data = []) {
+  echo json_encode(['ok' => true] + $data, JSON_UNESCAPED_UNICODE);
+  exit;
+}
+function json_err($message, $code = 400, $extra = []) {
+  http_response_code($code);
+  echo json_encode(['ok' => false, 'error' => $message] + $extra, JSON_UNESCAPED_UNICODE);
+  exit;
 }
 
-function is_dup_error(Throwable $e): bool {
-  if ($e instanceof PDOException) {
-    $sqlState = $e->errorInfo[0] ?? '';
-    $driver  = $e->errorInfo[1] ?? 0;
-    return $sqlState === '23000' || (int)$driver === 1062;
+function is_multipart() {
+  $ct = $_SERVER['CONTENT_TYPE'] ?? '';
+  return stripos($ct, 'multipart/form-data') !== false;
+}
+
+function read_body_any() {
+  if (is_multipart()) return [$_POST, $_FILES];
+  $raw = file_get_contents('php://input');
+  $data = json_decode($raw, true);
+  if (!is_array($data)) $data = [];
+  return [$data, []];
+}
+
+function save_uploaded_image($file, $subdir) {
+  if (!isset($file) || !is_array($file)) return null;
+  if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) return null;
+
+  $projectRoot = dirname(__DIR__, 2);
+  $uploadDirAbs = $projectRoot . '/uploads/' . $subdir;
+  if (!is_dir($uploadDirAbs)) {
+    if (!mkdir($uploadDirAbs, 0777, true)) json_err('สร้างโฟลเดอร์อัปโหลดไม่ได้', 500);
   }
-  return false;
+
+  $orig = $file['name'] ?? 'upload';
+  $ext = pathinfo($orig, PATHINFO_EXTENSION);
+  $ext = preg_replace('/[^a-zA-Z0-9]/', '', $ext);
+  $ext = $ext ? '.' . strtolower($ext) : '';
+  $filename = 'choice_' . date('Ymd_His') . '_' . bin2hex(random_bytes(6)) . $ext;
+
+  $destAbs = $uploadDirAbs . '/' . $filename;
+  if (!move_uploaded_file($file['tmp_name'], $destAbs)) {
+    json_err('อัปโหลดรูปไม่สำเร็จ', 500);
+  }
+
+  return 'uploads/' . $subdir . '/' . $filename;
 }
 
-// Normalize text: trim และ normalize ช่องว่างซ้ำ
-function normalizeText($text) {
-  if ($text === null || $text === '') return $text;
-  // แทนที่ whitespace หลายตัวเป็นช่องว่างเดียว และ trim
-  return trim(preg_replace('/\s+/u', ' ', $text));
+$method = strtoupper($_SERVER['REQUEST_METHOD'] ?? '');
+if (!in_array($method, ['PATCH', 'POST', 'PUT'], true)) {
+  json_err('Method not allowed', 405);
 }
 
-$body = json_decode(file_get_contents("php://input"), true);
-if (!is_array($body)) $body = $_POST ?? [];
+[$data, $files] = read_body_any();
 
-$id = $body['choice_id'] ?? null;
-if ($id === null || !ctype_digit((string)$id)) {
-  json_err("VALIDATION_ERROR", "invalid_choice_id", 400);
+$choice_id = isset($data['choice_id']) ? (int)$data['choice_id'] : 0;
+if ($choice_id <= 0) json_err('choice_id ไม่ถูกต้อง');
+
+$choice_label = array_key_exists('choice_label', $data) ? trim((string)$data['choice_label']) : null;
+
+// ✅ รองรับทั้ง choice_text และ choices_text (คำแนะนำ)
+$has_choice_text = array_key_exists('choice_text', $data) || array_key_exists('choices_text', $data);
+$choice_text = null;
+if ($has_choice_text) {
+  $raw = $data['choice_text'] ?? ($data['choices_text'] ?? null);
+  $choice_text = trim((string)$raw);
+  if ($choice_text === '') $choice_text = null; // อนุญาตให้ล้างค่า
 }
 
-// ตรวจสอบว่า choice_id มีอยู่จริง
+$image_url = array_key_exists('image_url', $data) ? trim((string)$data['image_url']) : null;
+if ($image_url === '') $image_url = null;
+
+$uploadPath = null;
+if (!empty($files['image_file'])) {
+  $uploadPath = save_uploaded_image($files['image_file'], 'choice_images');
+}
+if ($uploadPath) $image_url = $uploadPath;
+
 try {
-  $check = $dbh->prepare("SELECT choice_id, question_id, choice_label FROM choices WHERE choice_id = ?");
-  $check->execute([(int)$id]);
-  $existing = $check->fetch(PDO::FETCH_ASSOC);
-  if (!$existing) {
-    json_err("NOT_FOUND", "choice_not_found", 404);
-  }
-} catch (Throwable $e) {
-  json_err("DB_ERROR", "db_error", 500);
-}
+  global $dbh;
 
-$question_id  = array_key_exists('question_id', $body) ? $body['question_id'] : null;
-$choice_label = array_key_exists('choice_label', $body) ? normalizeText($body['choice_label']) : null;
-$choice_value = array_key_exists('choice_value', $body) ? trim((string)$body['choice_value']) : null;
-$image_url    = array_key_exists('image_url', $body) ? trim((string)$body['image_url']) : null;
-$sort_order   = array_key_exists('sort_order', $body) ? $body['sort_order'] : null;
-
-$fields = [];
-$params = [];
-
-try {
-  if ($question_id !== null) {
-    if (!ctype_digit((string)$question_id)) {
-      json_err("VALIDATION_ERROR", "invalid_question_id", 400);
-    }
-
-    $chk = $dbh->prepare("SELECT question_id FROM questions WHERE question_id = ? LIMIT 1");
-    $chk->execute([(int)$question_id]);
-    if (!$chk->fetch()) {
-      json_err("NOT_FOUND", "question_not_found", 404);
-    }
-
-    $fields[] = "question_id = ?";
-    $params[] = (int)$question_id;
-  }
+  $fields = [];
+  $params = [];
 
   if ($choice_label !== null) {
-    if ($choice_label === '') {
-      json_err("VALIDATION_ERROR", "choice_label_required", 400);
-    }
-
-    // ตรวจสอบ duplicate choice_label ใน question เดียวกัน (ยกเว้นตัวเอง)
-    $target_question_id = $question_id !== null ? (int)$question_id : (int)$existing['question_id'];
-    
-    // เปรียบเทียบ choice_label หลัง normalize เท่านั้น
-    // ถ้าเหมือนกับค่าเดิม (ตัวเอง) -> ไม่ต้องตรวจสอบ duplicate
-    $existing_normalized = normalizeText($existing['choice_label']);
-    $is_same_as_existing = ($choice_label === $existing_normalized && $target_question_id == $existing['question_id']);
-    
-    if (!$is_same_as_existing) {
-      // ตรวจสอบว่ามี choice_label ซ้ำในคำถามเดียวกันหรือไม่
-      $dupCheck = $dbh->prepare("
-        SELECT choice_id, choice_label 
-        FROM choices 
-        WHERE question_id = ? 
-          AND choice_id != ?
-      ");
-      $dupCheck->execute([$target_question_id, (int)$id]);
-      
-      while ($row = $dupCheck->fetch(PDO::FETCH_ASSOC)) {
-        if (normalizeText($row['choice_label']) === $choice_label) {
-          json_err("DUPLICATE", "choice_label_exists_in_question", 409);
-        }
-      }
-    }
-
+    if ($choice_label === '') json_err('choice_label ห้ามว่าง');
     $fields[] = "choice_label = ?";
     $params[] = $choice_label;
   }
 
-  if ($choice_value !== null) {
-    $fields[] = "choice_value = ?";
-    $params[] = ($choice_value === '' ? null : $choice_value);
+  // ✅ update เมื่อส่ง choice_text หรือ choices_text มา
+  if ($has_choice_text) {
+    $fields[] = "choice_text = ?";
+    $params[] = $choice_text;
   }
 
-  if ($image_url !== null) {
+  if ($image_url !== null || array_key_exists('image_url', $data) || $uploadPath) {
     $fields[] = "image_url = ?";
-    $params[] = ($image_url === '' ? null : $image_url);
+    $params[] = $image_url;
   }
 
-  if ($sort_order !== null) {
-    if (!is_numeric($sort_order)) {
-      json_err("VALIDATION_ERROR", "invalid_sort_order", 400);
-    }
-    $fields[] = "sort_order = ?";
-    $params[] = (int)$sort_order;
-  }
+  if (!$fields) json_err('nothing_to_update');
 
-  if (!$fields) {
-    json_err("VALIDATION_ERROR", "nothing_to_update", 400);
-  }
-
-  $params[] = (int)$id;
+  $params[] = $choice_id;
 
   $sql = "UPDATE choices SET " . implode(', ', $fields) . " WHERE choice_id = ?";
-  $st  = $dbh->prepare($sql);
+  $st = $dbh->prepare($sql);
   $st->execute($params);
 
-  // ดึงข้อมูลที่อัปเดตแล้วกลับมา
-  $q = $dbh->prepare("
-    SELECT c.*, q.question_text
-    FROM choices c
-    LEFT JOIN questions q ON q.question_id = c.question_id
-    WHERE c.choice_id = ?
-    LIMIT 1
-  ");
-  $q->execute([(int)$id]);
-  $row = $q->fetch(PDO::FETCH_ASSOC);
-
-  json_ok($row);
-
+  json_ok(['choice_id' => $choice_id]);
 } catch (Throwable $e) {
-  if (is_dup_error($e)) {
-    json_err("DUPLICATE", "choice_label_exists_in_question", 409);
-  }
-  json_err("DB_ERROR", "db_error", 500);
+  json_err('อัปเดตไม่สำเร็จ', 500, ['detail' => $e->getMessage()]);
 }

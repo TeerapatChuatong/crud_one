@@ -34,8 +34,44 @@ if (array_key_exists('min_score', $body)) {
 }
 
 if (array_key_exists('days', $body)) {
+  $v = $body['days'];
+  if ($v === null || $v === '') $v = 0;
+  if (!is_numeric($v) || (int)$v < 0 || (int)$v > 365) json_err("VALIDATION_ERROR","invalid_days",400);
   $fields[] = "days=?";
-  $params[] = ($body['days'] === null || $body['days'] === '') ? null : (int)$body['days'];
+  $params[] = (int)$v;
+}
+
+if (array_key_exists('times', $body)) {
+  $v = $body['times'];
+  if ($v === null || $v === '') $v = 0;
+  if (!is_numeric($v) || (int)$v < 0 || (int)$v > 99) json_err("VALIDATION_ERROR","invalid_times",400);
+  $fields[] = "times=?";
+  $params[] = (int)$v;
+}
+
+if (array_key_exists('sprays_per_product', $body)) {
+  $v = $body['sprays_per_product'];
+  if ($v === null || $v === '') $v = 2;
+  if (!is_numeric($v) || (int)$v < 1 || (int)$v > 20) json_err("VALIDATION_ERROR","invalid_sprays_per_product",400);
+  $fields[] = "sprays_per_product=?";
+  $params[] = (int)$v;
+}
+
+if (array_key_exists('max_products_per_group', $body)) {
+  $v = $body['max_products_per_group'];
+  if ($v === null || $v === '') $v = 2;
+  if (!is_numeric($v) || (int)$v < 1 || (int)$v > 20) json_err("VALIDATION_ERROR","invalid_max_products_per_group",400);
+  $fields[] = "max_products_per_group=?";
+  $params[] = (int)$v;
+}
+
+/* ✅ เพิ่มส่วนนี้ */
+if (array_key_exists('max_sprays_per_group', $body)) {
+  $v = $body['max_sprays_per_group'];
+  if ($v === null || $v === '') $v = 2;
+  if (!is_numeric($v) || (int)$v < 1 || (int)$v > 20) json_err("VALIDATION_ERROR","invalid_max_sprays_per_group",400);
+  $fields[] = "max_sprays_per_group=?";
+  $params[] = (int)$v;
 }
 
 if (!$fields) json_err("VALIDATION_ERROR","nothing_to_update",400);

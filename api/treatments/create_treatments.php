@@ -24,25 +24,15 @@ $min_raw = $body['min_score'] ?? null;
 if ($min_raw === null || $min_raw === '' || !is_numeric($min_raw)) json_err('VALIDATION_ERROR', 'invalid_min_score', 400);
 $min_score = (int)$min_raw;
 
-$days = null;
-if (array_key_exists('days', $body)) {
-  $days_raw = $body['days'];
-  if ($days_raw === '' || $days_raw === null) $days = null;
-  else {
-    if (!is_numeric($days_raw)) json_err('VALIDATION_ERROR', 'invalid_days', 400);
-    $days = (int)$days_raw;
-  }
-}
+// days/times ในสคีมาคุณเป็น NOT NULL default 0 -> แปลงเป็น int เสมอ
+$days_raw = $body['days'] ?? 0;
+$times_raw = $body['times'] ?? 0;
 
-$times = null;
-if (array_key_exists('times', $body)) {
-  $times_raw = $body['times'];
-  if ($times_raw === '' || $times_raw === null) $times = null;
-  else {
-    if (!is_numeric($times_raw)) json_err('VALIDATION_ERROR', 'invalid_times', 400);
-    $times = (int)$times_raw;
-  }
-}
+if (!is_numeric($days_raw)) json_err('VALIDATION_ERROR', 'invalid_days', 400);
+if (!is_numeric($times_raw)) json_err('VALIDATION_ERROR', 'invalid_times', 400);
+
+$days = (int)$days_raw;
+$times = (int)$times_raw;
 
 try {
   $dbh->beginTransaction();
@@ -55,11 +45,12 @@ try {
   if ($existing) {
     $risk_level_id = (int)$existing['risk_level_id'];
 
-    // ✅ ห้ามเพิ่มซ้ำ: 1 risk level มีได้แค่ 1 treatment
+    // ห้ามเพิ่มซ้ำ: 1 risk level มีได้แค่ 1 treatment
     $stDup = $dbh->prepare('SELECT treatment_id FROM treatments WHERE risk_level_id=? LIMIT 1');
     $stDup->execute([$risk_level_id]);
     $dup = $stDup->fetch(PDO::FETCH_ASSOC);
     if ($dup) {
+      $dbh->rollBack();
       json_err('DUPLICATE', 'โรค+ระดับนี้มีคำแนะนำอยู่แล้ว (ไม่สามารถเพิ่มซ้ำได้)', 409);
     }
 
@@ -74,7 +65,7 @@ try {
     $risk_level_id = (int)$dbh->lastInsertId();
   }
 
-  // เพิ่ม treatment ใหม่
+  // เพิ่ม treatment ใหม่ (เก็บ template ไว้ที่ advice_text ได้เลย)
   $st2 = $dbh->prepare('INSERT INTO treatments (risk_level_id, advice_text) VALUES (?, ?)');
   $st2->execute([$risk_level_id, $advice_text]);
   $treatment_id = (int)$dbh->lastInsertId();

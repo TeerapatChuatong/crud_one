@@ -1,0 +1,65 @@
+<?php
+$dbPath = __DIR__ . '/../db.php';
+if (!file_exists($dbPath)) $dbPath = __DIR__ . '/../../db.php';
+require_once $dbPath;
+
+require_admin();
+
+function dbh(): PDO {
+  if (isset($GLOBALS['pdo']) && $GLOBALS['pdo'] instanceof PDO) return $GLOBALS['pdo'];
+  if (isset($GLOBALS['dbh']) && $GLOBALS['dbh'] instanceof PDO) return $GLOBALS['dbh'];
+  json_err('DB_ERROR', 'db_not_initialized', 500);
+}
+
+function read_json_body(): array {
+  $raw = file_get_contents('php://input');
+  $data = json_decode($raw, true);
+  if (is_array($data)) return $data;
+  if (!empty($_POST) && is_array($_POST)) return $_POST;
+  return [];
+}
+
+function require_int($v, string $code) : int {
+  if ($v === null || $v === '' || !ctype_digit((string)$v)) json_err('VALIDATION_ERROR', $code, 400);
+  return (int)$v;
+}
+
+$method = $_SERVER['REQUEST_METHOD'] ?? '';
+if ($method !== 'DELETE' && $method !== 'POST') {
+  json_err('METHOD_NOT_ALLOWED', 'delete_or_post_only', 405);
+}
+
+$db = dbh();
+
+// รองรับ 2 แบบ:
+// 1) เดิม: DELETE ?plan_id=...
+// 2) ใช้ในหน้า Admin: POST JSON { risk_level_id, moa_group_id }
+$data = ($method === 'POST') ? read_json_body() : [];
+
+$plan_id = $data['plan_id'] ?? ($_GET['plan_id'] ?? null);
+$risk_level_id = $data['risk_level_id'] ?? null;
+$moa_group_id  = $data['moa_group_id'] ?? null;
+
+try {
+  if ($plan_id !== null && $plan_id !== '') {
+    $id = require_int($plan_id, 'invalid_plan_id');
+    $st = $db->prepare("DELETE FROM risk_level_moa_plan WHERE plan_id = ?");
+    $st->execute([$id]);
+    if ($st->rowCount() === 0) json_err('NOT_FOUND', 'risk_level_moa_plan_not_found', 404);
+    json_ok(['plan_id' => $id, 'deleted' => true]);
+  }
+
+  $rlId  = require_int($risk_level_id, 'risk_level_id_invalid');
+  $moaId = require_int($moa_group_id,  'moa_group_id_invalid');
+
+  $st = $db->prepare("DELETE FROM risk_level_moa_plan WHERE risk_level_id = ? AND moa_group_id = ?");
+  $st->execute([$rlId, $moaId]);
+  if ($st->rowCount() === 0) json_err('NOT_FOUND', 'risk_level_moa_plan_not_found', 404);
+
+  json_ok(['risk_level_id' => $rlId, 'moa_group_id' => $moaId, 'deleted' => true]);
+} catch (PDOException $e) {
+  if ($e->getCode() === '23000') json_err('FK_RESTRICT', 'cannot_delete_referenced_row', 409);
+  json_err('DB_ERROR', 'db_error', 500);
+} catch (Throwable $e) {
+  json_err('SERVER_ERROR', 'server_error', 500);
+}

@@ -1,86 +1,105 @@
 <?php
+// api/care_logs/read_care_logs.php (patched)
 require_once __DIR__ . '/../db.php';
 
-// ✅ เรียก require_auth.php และรับข้อมูล user
-$authUser = require __DIR__ . '/../auth/require_auth.php';
+// Auth (รองรับทั้งแบบ return array และแบบ global $AUTH_USER_*)
+$authFile = __DIR__ . '/../auth/require_auth.php';
+$authUser = null;
+if (file_exists($authFile)) {
+  $tmp = require $authFile;
+  if (is_array($tmp)) $authUser = $tmp;
+}
+if (function_exists('require_auth')) { require_auth(); }
+
+$currentUserId = 0;
+$currentUserRole = 'user';
+if (isset($AUTH_USER_ID)) $currentUserId = (int)$AUTH_USER_ID;
+if (isset($AUTH_USER_ROLE)) $currentUserRole = (string)$AUTH_USER_ROLE;
+if (is_array($authUser) && !empty($authUser['id'])) {
+  $currentUserId = (int)$authUser['id'];
+  if (!empty($authUser['role'])) $currentUserRole = (string)$authUser['role'];
+}
+if ($currentUserId <= 0 && isset($_SESSION['user_id'])) {
+  $currentUserId = (int)$_SESSION['user_id'];
+}
+if ($currentUserId <= 0) json_err('UNAUTHORIZED', 'unauthorized', 401);
+$isAdmin = in_array($currentUserRole, ['admin', 'super_admin'], true);
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
-    json_err("METHOD_NOT_ALLOWED", "get_only", 405);
+  json_err('METHOD_NOT_ALLOWED', 'get_only', 405);
 }
 
+$normalize_care_type_db = function ($careType) {
+  $careType = strtolower(trim((string)$careType));
+  if ($careType === 'spray') $careType = 'pesticide';
+  return $careType;
+};
+
+$care_type_for_client = function ($careTypeDb) {
+  if ($careTypeDb === 'pesticide') return 'spray';
+  return $careTypeDb;
+};
+
 try {
-    // ✅ ดึงข้อมูล user จาก $authUser
-    $userId  = (int)$authUser['id'];
-    $isAdmin = in_array($authUser['role'] ?? 'user', ['admin', 'super_admin'], true);
+  $where = [];
+  $params = [];
 
-    // ✅ Debug
-    error_log("=== GET CARE LOGS ===");
-    error_log("User ID: $userId");
-    error_log("Is Admin: " . ($isAdmin ? 'Yes' : 'No'));
+  if (!$isAdmin) {
+    $where[] = 'user_id = ?';
+    $params[] = $currentUserId;
+  } elseif (isset($_GET['user_id']) && ctype_digit((string)$_GET['user_id'])) {
+    $where[] = 'user_id = ?';
+    $params[] = (int)$_GET['user_id'];
+  }
 
-    $where  = [];
-    $params = [];
+  if (isset($_GET['tree_id']) && is_numeric($_GET['tree_id'])) {
+    $where[] = 'tree_id = ?';
+    $params[] = (int)$_GET['tree_id'];
+  }
 
-    // ✅ ถ้าไม่ใช่ admin ให้เห็นเฉพาะข้อมูลของตัวเอง
-    if (!$isAdmin) {
-        $where[]  = "user_id = ?";
-        $params[] = $userId;
-        error_log("Filter: Only user's own logs");
+  if (isset($_GET['care_type']) && $_GET['care_type'] !== '') {
+    $where[] = 'care_type = ?';
+    $params[] = $normalize_care_type_db($_GET['care_type']);
+  }
+
+  if (!empty($_GET['from_date'])) {
+    $where[] = 'care_date >= ?';
+    $params[] = (string)$_GET['from_date'];
+  }
+
+  if (!empty($_GET['to_date'])) {
+    $where[] = 'care_date <= ?';
+    $params[] = (string)$_GET['to_date'];
+  }
+
+  if (isset($_GET['is_reminder']) && ($_GET['is_reminder'] === '0' || $_GET['is_reminder'] === '1')) {
+    $where[] = 'is_reminder = ?';
+    $params[] = (int)$_GET['is_reminder'];
+  }
+
+  if (isset($_GET['is_done']) && ($_GET['is_done'] === '0' || $_GET['is_done'] === '1')) {
+    $where[] = 'is_done = ?';
+    $params[] = (int)$_GET['is_done'];
+  }
+
+  $sql = 'SELECT * FROM care_logs';
+  if ($where) $sql .= ' WHERE ' . implode(' AND ', $where);
+  $sql .= ' ORDER BY care_date DESC, log_id DESC';
+
+  $stmt = $dbh->prepare($sql);
+  $stmt->execute($params);
+  $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+  $rawFlag = isset($_GET['raw']) && $_GET['raw'] === '1';
+  if (!$rawFlag) {
+    foreach ($rows as &$r) {
+      if (isset($r['care_type'])) $r['care_type'] = $care_type_for_client($r['care_type']);
     }
+    unset($r);
+  }
 
-    // filter เพิ่ม: tree_id, care_type, date range ฯลฯ
-    if (isset($_GET['tree_id']) && is_numeric($_GET['tree_id'])) {
-        $where[]  = "tree_id = ?";
-        $params[] = (int)$_GET['tree_id'];
-        error_log("Filter: tree_id = " . $_GET['tree_id']);
-    }
-
-    if (!empty($_GET['care_type'])) {
-        $where[]  = "care_type = ?";
-        $params[] = (string)$_GET['care_type'];
-        error_log("Filter: care_type = " . $_GET['care_type']);
-    }
-
-    if (!empty($_GET['from_date'])) {
-        $where[]  = "care_date >= ?";
-        $params[] = (string)$_GET['from_date'];
-        error_log("Filter: from_date = " . $_GET['from_date']);
-    }
-
-    if (!empty($_GET['to_date'])) {
-        $where[]  = "care_date <= ?";
-        $params[] = (string)$_GET['to_date'];
-        error_log("Filter: to_date = " . $_GET['to_date']);
-    }
-
-    // ✅ เพิ่ม is_reminder และ is_done ใน SELECT
-    $sql = "SELECT
-              log_id, user_id, tree_id, care_type, care_date,
-              is_reminder, is_done,
-              product_name, amount, unit, area, note, created_at
-            FROM care_logs";
-
-    if ($where) {
-        $sql .= " WHERE " . implode(' AND ', $where);
-    }
-
-    $sql .= " ORDER BY care_date DESC, log_id DESC";
-
-    error_log("SQL: $sql");
-    error_log("Params: " . print_r($params, true));
-
-    $stmt = $dbh->prepare($sql);
-    $stmt->execute($params);
-    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    error_log("Found " . count($rows) . " records");
-    error_log("=====================\n");
-
-    json_ok($rows);
+  json_ok($rows);
 
 } catch (Throwable $e) {
-    error_log("❌ GET_CARE_LOGS ERROR: " . $e->getMessage());
-    error_log("Stack trace: " . $e->getTraceAsString());
-    error_log("=====================\n");
-    json_err("DB_ERROR", "db_error: " . $e->getMessage(), 500);
+  json_err('DB_ERROR', 'db_error', 500);
 }
