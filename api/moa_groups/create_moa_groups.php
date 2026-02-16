@@ -10,7 +10,9 @@ require_admin();
 function dbh(): PDO {
   if (isset($GLOBALS['pdo']) && $GLOBALS['pdo'] instanceof PDO) return $GLOBALS['pdo'];
   if (isset($GLOBALS['dbh']) && $GLOBALS['dbh'] instanceof PDO) return $GLOBALS['dbh'];
+
   json_err('DB_ERROR', 'db_not_initialized', 500);
+  exit; // ✅ ทำให้ Intelephense รู้ว่าจบแน่นอน
 }
 
 function has_column(PDO $db, string $table, string $col): bool {
@@ -64,7 +66,7 @@ try {
   if (has_column($db, 'moa_groups', 'moa_system')) $sysCol = 'moa_system';
   else if (has_column($db, 'moa_groups', 'system')) $sysCol = 'system';
 
-  $allowedSystems = ['FRAC', 'IRAC', 'HRAC', 'OTHER'];
+  $allowedSystems = ['FRAC', 'HRAC', 'OTHER'];
 
   $tmp_moa_code = require_str($data['moa_code'] ?? null, 'moa_code_required');
   $tmp_group_name = opt_str($data['group_name'] ?? null);
@@ -104,7 +106,6 @@ try {
   // return row (alias moa_system ให้ frontend เสมอ)
   $systemExpr = "CASE
     WHEN mg.group_name LIKE 'FRAC%' THEN 'FRAC'
-    WHEN mg.group_name LIKE 'IRAC%' THEN 'IRAC'
     WHEN mg.group_name LIKE 'HRAC%' THEN 'HRAC'
     ELSE 'OTHER'
   END";

@@ -19,9 +19,11 @@ try{
   $v_status=opt_enum($data['status']??null,['active','completed','stopped'],'status_invalid');
   $v_current_moa_group_id=opt_int($data['current_moa_group_id']??null,'current_moa_group_id_invalid');
   $v_current_chemical_id=opt_int($data['current_chemical_id']??null,'current_chemical_id_invalid');
+  $v_diagnosis_history_id=opt_int($data['diagnosis_history_id']??null,'diagnosis_history_id_invalid');
   $v_group_attempt_no=opt_int($data['group_attempt_no']??null,'group_attempt_no_invalid');
   $v_product_attempt_no=opt_int($data['product_attempt_no']??null,'product_attempt_no_invalid');
   $v_spray_round_no=opt_int($data['spray_round_no']??null,'spray_round_no_invalid');
+  $v_start_spray_date=opt_str($data['start_spray_date']??null,20);
   $v_last_spray_date=opt_str($data['last_spray_date']??null,20);
   $v_next_spray_date=opt_str($data['next_spray_date']??null,20);
   $v_last_evaluation=opt_enum($data['last_evaluation']??null,['improved','stable','not_improved'],'last_evaluation_invalid');
@@ -29,9 +31,11 @@ try{
   if($v_status!==null){$sets[]="status=:status";$params[':status']=$v_status;}
   if($v_current_moa_group_id!==null){$sets[]="current_moa_group_id=:current_moa_group_id";$params[':current_moa_group_id']=$v_current_moa_group_id;}
   if($v_current_chemical_id!==null){$sets[]="current_chemical_id=:current_chemical_id";$params[':current_chemical_id']=$v_current_chemical_id;}
+  if($v_diagnosis_history_id!==null){$sets[]="diagnosis_history_id=:diagnosis_history_id";$params[':diagnosis_history_id']=$v_diagnosis_history_id;}
   if($v_group_attempt_no!==null){$sets[]="group_attempt_no=:group_attempt_no";$params[':group_attempt_no']=$v_group_attempt_no;}
   if($v_product_attempt_no!==null){$sets[]="product_attempt_no=:product_attempt_no";$params[':product_attempt_no']=$v_product_attempt_no;}
   if($v_spray_round_no!==null){$sets[]="spray_round_no=:spray_round_no";$params[':spray_round_no']=$v_spray_round_no;}
+  if($v_start_spray_date!==null){$sets[]="start_spray_date=:start_spray_date";$params[':start_spray_date']=$v_start_spray_date;}
   if($v_last_spray_date!==null){$sets[]="last_spray_date=:last_spray_date";$params[':last_spray_date']=$v_last_spray_date;}
   if($v_next_spray_date!==null){$sets[]="next_spray_date=:next_spray_date";$params[':next_spray_date']=$v_next_spray_date;}
   if($v_last_evaluation!==null){$sets[]="last_evaluation=:last_evaluation";$params[':last_evaluation']=$v_last_evaluation;}

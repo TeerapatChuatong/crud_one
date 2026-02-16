@@ -36,6 +36,7 @@ try {
         d.disease_th, d.disease_en,
         ot.tree_name,
         rl.level_code, rl.min_score, rl.days, rl.times,
+      COALESCE(rl.evaluation_after_days, rl.days) AS evaluation_after_days,
 
         -- ✅ ส่ง key ให้ตรงกับฝั่ง Flutter
         COALESCE(cr.reminders_total, cr2.reminders_total, 0) AS reminder_total,
@@ -130,6 +131,7 @@ try {
       d.disease_th, d.disease_en,
       ot.tree_name,
       rl.level_code, rl.min_score, rl.days, rl.times,
+      COALESCE(rl.evaluation_after_days, rl.days) AS evaluation_after_days,
 
       -- ✅ ส่ง key ให้ตรงกับฝั่ง Flutter
       COALESCE(cr.reminders_total, cr2.reminders_total, 0) AS reminder_total,

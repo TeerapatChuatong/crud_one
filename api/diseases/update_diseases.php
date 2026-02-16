@@ -119,11 +119,6 @@ if ($en_input !== null) {
   $params[] = $disease_en;
 }
 
-if (array_key_exists('description', $body)) {
-  $fields[] = "description = ?";
-  $params[] = $normNullableText($body['description']);
-}
-
 if (array_key_exists('causes', $body)) {
   $fields[] = "causes = ?";
   $params[] = $normNullableText($body['causes']);

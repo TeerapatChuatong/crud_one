@@ -49,6 +49,15 @@ if (array_key_exists('times', $body)) {
   $params[] = (int)$v;
 }
 
+if (array_key_exists('evaluation_after_days', $body)) {
+  $v = $body['evaluation_after_days'];
+  if ($v === null || $v === '') $v = 0;
+  if (!is_numeric($v) || (int)$v < 0 || (int)$v > 365) json_err("VALIDATION_ERROR","invalid_evaluation_after_days",400);
+  $fields[] = "evaluation_after_days=?";
+  $params[] = (int)$v;
+}
+
+
 if (array_key_exists('sprays_per_product', $body)) {
   $v = $body['sprays_per_product'];
   if ($v === null || $v === '') $v = 2;

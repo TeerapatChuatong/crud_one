@@ -84,13 +84,15 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
 $db = dbh();
 $id = $_GET['chemical_id'] ?? null;
 
+
+$usageSelect = has_column($db, 'chemicals', 'usage_rate') ? 'c.usage_rate' : 'NULL AS usage_rate';
 try {
   if ($id !== null && $id !== '') {
     $id = require_int($id, 'invalid_chemical_id');
 
     // ✅ FIX: ใช้ alias c แทน chemicals
     $st = $db->prepare(
-      "SELECT c.chemical_id, c.trade_name, c.active_ingredient, c.target_type, c.moa_group_id,
+      "SELECT c.chemical_id, c.trade_name, c.active_ingredient, $usageSelect, c.target_type, c.moa_group_id,
               mg.moa_code, mg.group_name AS moa_group_name, c.notes, c.is_active
        FROM chemicals c
        LEFT JOIN moa_groups mg ON mg.moa_group_id = c.moa_group_id
@@ -109,7 +111,7 @@ try {
   $is_active = opt_bool01($_GET['is_active'] ?? null, 'is_active_invalid');
 
   $sql =
-    "SELECT c.chemical_id, c.trade_name, c.active_ingredient, c.target_type, c.moa_group_id,
+    "SELECT c.chemical_id, c.trade_name, c.active_ingredient, $usageSelect, c.target_type, c.moa_group_id,
             mg.moa_code, mg.group_name AS moa_group_name, c.notes, c.is_active
      FROM chemicals c
      LEFT JOIN moa_groups mg ON mg.moa_group_id = c.moa_group_id

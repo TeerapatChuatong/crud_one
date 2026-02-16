@@ -45,6 +45,8 @@ $session_uid = session_uid();
 $isAdmin = is_admin_safe();
 
 $episode_id = opt_int($_GET['episode_id'] ?? null, 'episode_id_invalid');
+// ✅ รองรับการอ่าน episode ด้วย diagnosis_history_id (ใช้กับ flow “ติดตามผลหลังครบแผน”)
+$diagnosis_history_id = opt_int($_GET['diagnosis_history_id'] ?? null, 'diagnosis_history_id_invalid');
 
 try {
   if ($episode_id !== null) {
@@ -75,6 +77,70 @@ try {
     $row = $st->fetch(PDO::FETCH_ASSOC);
     if (!$row) json_err('NOT_FOUND', 'episode_not_found', 404);
     json_ok($row);
+  }
+
+  // ✅ อ่าน episode ของ diagnosis_history_id (ถ้ามี) — จะคืนเป็น list
+  //    1) พยายามหาโดย e.diagnosis_history_id ก่อน
+  //    2) ถ้าไม่พบ (กรณีข้อมูลเก่ายังไม่ผูก) -> fallback หา episode ล่าสุดของ tree+disease จาก diagnosis_history
+  if ($diagnosis_history_id !== null) {
+    $user_id = $session_uid;
+    if ($isAdmin) $user_id = opt_int($_GET['user_id'] ?? null, 'user_id_invalid') ?? $session_uid;
+
+    $st = $db->prepare(
+      "SELECT e.*,
+              t.tree_name,
+              d.disease_th, d.disease_en
+       FROM treatment_episodes e
+       INNER JOIN orange_trees t ON t.tree_id=e.tree_id
+       INNER JOIN diseases d ON d.disease_id=e.disease_id
+       WHERE e.user_id=:uid AND e.diagnosis_history_id=:dh_id
+       ORDER BY e.episode_id DESC"
+    );
+    $st->execute([':uid' => $user_id, ':dh_id' => $diagnosis_history_id]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    if (!$rows || count($rows) === 0) {
+      if ($isAdmin) {
+        $stDh = $db->prepare(
+          "SELECT user_id, tree_id, disease_id
+           FROM diagnosis_history
+           WHERE diagnosis_history_id=:dh_id
+           LIMIT 1"
+        );
+        $stDh->execute([':dh_id' => $diagnosis_history_id]);
+      } else {
+        $stDh = $db->prepare(
+          "SELECT user_id, tree_id, disease_id
+           FROM diagnosis_history
+           WHERE diagnosis_history_id=:dh_id AND user_id=:uid
+           LIMIT 1"
+        );
+        $stDh->execute([':dh_id' => $diagnosis_history_id, ':uid' => $user_id]);
+      }
+
+      $dh = $stDh->fetch(PDO::FETCH_ASSOC);
+      if ($dh) {
+        $st2 = $db->prepare(
+          "SELECT e.*,
+                  t.tree_name,
+                  d.disease_th, d.disease_en
+           FROM treatment_episodes e
+           INNER JOIN orange_trees t ON t.tree_id=e.tree_id
+           INNER JOIN diseases d ON d.disease_id=e.disease_id
+           WHERE e.user_id=:uid AND e.tree_id=:tree_id AND e.disease_id=:disease_id
+           ORDER BY e.episode_id DESC
+           LIMIT 5"
+        );
+        $st2->execute([
+          ':uid' => (int)$dh['user_id'],
+          ':tree_id' => (int)$dh['tree_id'],
+          ':disease_id' => (int)$dh['disease_id'],
+        ]);
+        $rows = $st2->fetchAll(PDO::FETCH_ASSOC);
+      }
+    }
+
+    json_ok($rows ?? []);
   }
 
   $user_id = $session_uid;

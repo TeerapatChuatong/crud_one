@@ -10,7 +10,9 @@ require_admin();
 function dbh(): PDO {
   if (isset($GLOBALS['pdo']) && $GLOBALS['pdo'] instanceof PDO) return $GLOBALS['pdo'];
   if (isset($GLOBALS['dbh']) && $GLOBALS['dbh'] instanceof PDO) return $GLOBALS['dbh'];
+
   json_err('DB_ERROR', 'db_not_initialized', 500);
+  exit; // ✅ ทำให้ Intelephense รู้ว่าจบแน่นอน
 }
 
 function read_json_body(): array {

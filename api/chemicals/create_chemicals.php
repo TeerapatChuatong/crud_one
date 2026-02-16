@@ -12,6 +12,16 @@ function dbh(): PDO {
   json_err('DB_ERROR', 'db_not_initialized', 500);
 }
 
+function has_column(PDO $db, string $table, string $col): bool {
+  $st = $db->prepare(
+    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?"
+  );
+  $st->execute([$table, $col]);
+  return ((int)$st->fetchColumn()) > 0;
+}
+
+
 function read_json_body(): array {
   $raw = file_get_contents('php://input');
   $data = json_decode($raw, true);
@@ -77,9 +87,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
 $db = dbh();
 $data = read_json_body();
 
+
+$hasUsageRate = has_column($db, 'chemicals', 'usage_rate');
 try {
   $tmp_trade_name = require_str($data['trade_name'] ?? null, 'trade_name_required', 150);
   $tmp_active_ingredient = opt_str($data['active_ingredient'] ?? null, 200);
+
+  $tmp_usage_rate = opt_str($data['usage_rate'] ?? null, 150);
 
   // ✅ กัน null -> ใช้ default ตาม schema
   $tmp_target_type = opt_enum($data['target_type'] ?? null, ["fungicide", "bactericide", "insecticide", "other"], 'target_type_invalid');
@@ -97,18 +111,35 @@ try {
     json_err('VALIDATION_ERROR', 'moa_group_not_found', 400);
   }
 
-  $stmt = $db->prepare(
-    "INSERT INTO chemicals (trade_name, active_ingredient, target_type, moa_group_id, notes, is_active)
-     VALUES (:trade_name, :active_ingredient, :target_type, :moa_group_id, :notes, :is_active)"
-  );
-  $stmt->execute([
-    'trade_name' => $tmp_trade_name,
-    'active_ingredient' => $tmp_active_ingredient,
-    'target_type' => $tmp_target_type,
-    'moa_group_id' => $tmp_moa_group_id,
-    'notes' => $tmp_notes,
-    'is_active' => $tmp_is_active
-  ]);
+  
+  if ($hasUsageRate) {
+    $stmt = $db->prepare(
+      "INSERT INTO chemicals (trade_name, active_ingredient, usage_rate, target_type, moa_group_id, notes, is_active)
+       VALUES (:trade_name, :active_ingredient, :usage_rate, :target_type, :moa_group_id, :notes, :is_active)"
+    );
+    $stmt->execute([
+      'trade_name' => $tmp_trade_name,
+      'active_ingredient' => $tmp_active_ingredient,
+      'usage_rate' => $tmp_usage_rate,
+      'target_type' => $tmp_target_type,
+      'moa_group_id' => $tmp_moa_group_id,
+      'notes' => $tmp_notes,
+      'is_active' => $tmp_is_active
+    ]);
+  } else {
+    $stmt = $db->prepare(
+      "INSERT INTO chemicals (trade_name, active_ingredient, target_type, moa_group_id, notes, is_active)
+       VALUES (:trade_name, :active_ingredient, :target_type, :moa_group_id, :notes, :is_active)"
+    );
+    $stmt->execute([
+      'trade_name' => $tmp_trade_name,
+      'active_ingredient' => $tmp_active_ingredient,
+      'target_type' => $tmp_target_type,
+      'moa_group_id' => $tmp_moa_group_id,
+      'notes' => $tmp_notes,
+      'is_active' => $tmp_is_active
+    ]);
+  }
 
   $newId = (int)$db->lastInsertId();
   $row = $db->prepare("SELECT * FROM chemicals WHERE chemical_id = ?");

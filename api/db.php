@@ -1,5 +1,10 @@
 <?php
 // --- always JSON ---
+// กัน warning/notice หลุดไปปน response
+ini_set('display_errors', '0');
+ini_set('display_startup_errors', '0');
+error_reporting(E_ALL);
+
 header("Content-Type: application/json; charset=utf-8");
 
 /* ================= CORS (จำเป็นเท่าที่ใช้) =================
@@ -21,7 +26,7 @@ if ($origin && in_array($origin, $allowed, true)) {
   header("Access-Control-Allow-Origin: null");
   header("Vary: Origin");
   http_response_code(403);
-  echo json_encode(["ok"=>false,"error"=>"CORS_FORBIDDEN","message"=>"Origin not allowed"]);
+  echo json_encode(["ok"=>false,"error"=>"CORS_FORBIDDEN","message"=>"Origin not allowed"], JSON_UNESCAPED_UNICODE);
   exit;
 }
 
@@ -37,6 +42,17 @@ $DB_NAME = getenv('DB_NAME') ?: getenv('MYSQLDATABASE') ?: 'mydbtest2';
 $DB_USER = getenv('DB_USER') ?: getenv('MYSQLUSER') ?: 'root';
 $DB_PASS = getenv('DB_PASS') ?: getenv('MYSQLPASSWORD') ?: '';
 
+// ✅ เพิ่ม mysqli ($conn) เพื่อไม่ให้หน้า/ไฟล์เดิมพัง (บางไฟล์ยังใช้ $conn)
+if (!isset($conn)) {
+  $conn = @new mysqli($DB_HOST, $DB_USER, $DB_PASS, $DB_NAME, (int)$DB_PORT);
+  if ($conn->connect_errno) {
+    http_response_code(500);
+    echo json_encode(["ok"=>false,"error"=>"DB_CONNECT_FAIL","message"=>"mysqli connect failed"], JSON_UNESCAPED_UNICODE);
+    exit;
+  }
+  $conn->set_charset('utf8mb4');
+}
+
 try {
   $pdo = new PDO(
     "mysql:host={$DB_HOST};port={$DB_PORT};dbname={$DB_NAME};charset=utf8mb4",
@@ -49,7 +65,7 @@ try {
   );
 } catch (Throwable $e) {
   http_response_code(500);
-  echo json_encode(["ok"=>false,"error"=>"DB_CONNECT_FAIL"]);
+  echo json_encode(["ok"=>false,"error"=>"DB_CONNECT_FAIL"], JSON_UNESCAPED_UNICODE);
   exit;
 }
 
@@ -59,13 +75,16 @@ $is_https = (
   || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
 );
 
-session_set_cookie_params([
-  'lifetime' => 60*60*24*7,
-  'path'     => '/',
-  'secure'   => $is_https,
-  'httponly' => true,
-  'samesite' => $is_https ? 'None' : 'Lax',
-]);
+// ✅ FIX: เรียก session_set_cookie_params เฉพาะตอน session ยังไม่ active
+if (session_status() === PHP_SESSION_NONE) {
+  session_set_cookie_params([
+    'lifetime' => 60*60*24*7,
+    'path'     => '/',
+    'secure'   => $is_https,
+    'httponly' => true,
+    'samesite' => $is_https ? 'None' : 'Lax',
+  ]);
+}
 
 // ✅ NEW: รองรับ Authorization: Bearer <token> ให้ใช้เป็น session_id ได้
 function _bearer_token() {
@@ -97,8 +116,22 @@ if (!function_exists('json_ok')) {
 
 if (!function_exists('json_err')) {
   function json_err($code, $msg='', $status=400) {
+    // ✅ ป้องกัน Fatal: บางที่อาจส่ง array มาเป็น $msg หรือ $status
+    $extra = [];
+    if (is_array($msg)) {
+      $extra = $msg;
+      $msg = '';
+    }
+    if (is_array($status)) {
+      $extra = array_merge($extra, $status);
+      $status = 400;
+    }
+    if (!is_int($status)) {
+      $status = is_numeric($status) ? (int)$status : 400;
+    }
+
     http_response_code($status);
-    echo json_encode(["ok"=>false, "error"=>$code, "message"=>$msg], JSON_UNESCAPED_UNICODE);
+    echo json_encode(["ok"=>false, "error"=>$code, "message"=>$msg] + $extra, JSON_UNESCAPED_UNICODE);
     exit;
   }
 }

@@ -21,12 +21,27 @@ try{
   $v_spray_round_no=opt_int($data['spray_round_no']??null,'spray_round_no_invalid');
   $v_evaluation_result=opt_enum($data['evaluation_result']??null,['improved','stable','not_improved'],'evaluation_result_invalid');
   $v_note=opt_str($data['note']??null);
+
+  $has_planned_start_date = array_key_exists('planned_start_date', $data);
+  $v_planned_start_date = null;
+  if ($has_planned_start_date) {
+    $vv = $data['planned_start_date'];
+    if ($vv === null || $vv === '') {
+      $v_planned_start_date = null;
+    } else {
+      $s = trim((string)$vv);
+      if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $s)) json_err('VALIDATION_ERROR','invalid_planned_start_date',400);
+      $v_planned_start_date = $s;
+    }
+  }
+
   $sets=[]; $params=[':id'=>$event_id];
   if($v_moa_group_id!==null){$sets[]="moa_group_id=:moa_group_id";$params[':moa_group_id']=$v_moa_group_id;}
   if($v_chemical_id!==null){$sets[]="chemical_id=:chemical_id";$params[':chemical_id']=$v_chemical_id;}
   if($v_spray_round_no!==null){$sets[]="spray_round_no=:spray_round_no";$params[':spray_round_no']=$v_spray_round_no;}
   if($v_evaluation_result!==null){$sets[]="evaluation_result=:evaluation_result";$params[':evaluation_result']=$v_evaluation_result;}
   if($v_note!==null){$sets[]="note=:note";$params[':note']=$v_note;}
+  if($has_planned_start_date){$sets[]="planned_start_date=:planned_start_date";$params[':planned_start_date']=$v_planned_start_date;}
   if(count($sets)===0) json_err('VALIDATION_ERROR','no_fields_to_update',400);
   $st=$db->prepare("UPDATE treatment_episode_events SET ".implode(', ',$sets)." WHERE event_id=:id");
   $st->execute($params);

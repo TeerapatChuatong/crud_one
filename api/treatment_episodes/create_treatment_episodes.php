@@ -75,6 +75,7 @@ try {
   $tree_id = require_int($data['tree_id'] ?? null, 'tree_id_invalid');
   $disease_id = require_int($data['disease_id'] ?? null, 'disease_id_invalid');
   $risk_level_id = require_int($data['risk_level_id'] ?? null, 'risk_level_id_invalid');
+  $diagnosis_history_id = opt_int($data['diagnosis_history_id'] ?? null, 'diagnosis_history_id_invalid');
 
   if (!$isAdmin) {
     $chk = $db->prepare("SELECT tree_id FROM orange_trees WHERE tree_id=? AND user_id=?");
@@ -90,6 +91,8 @@ try {
   $product_attempt_no = opt_int($data['product_attempt_no'] ?? null, 'product_attempt_no_invalid') ?? 1;
   $spray_round_no     = opt_int($data['spray_round_no'] ?? null, 'spray_round_no_invalid') ?? 0;
 
+  // วันที่เริ่มพ่นยา (ผู้ใช้เลือกเอง) — เก็บไว้แยกจาก next_spray_date
+  $start_spray_date = opt_str($data['start_spray_date'] ?? null, 20);
   $last_spray_date = opt_str($data['last_spray_date'] ?? null, 20);
   $next_spray_date = opt_str($data['next_spray_date'] ?? null, 20);
 
@@ -97,15 +100,15 @@ try {
 
   $st = $db->prepare(
     "INSERT INTO treatment_episodes
-      (user_id, tree_id, disease_id, risk_level_id, status,
+      (user_id, tree_id, disease_id, risk_level_id, diagnosis_history_id, status,
        current_moa_group_id, current_chemical_id,
        group_attempt_no, product_attempt_no, spray_round_no,
-       last_spray_date, next_spray_date, last_evaluation)
+       start_spray_date, last_spray_date, next_spray_date, last_evaluation)
      VALUES
-      (:user_id, :tree_id, :disease_id, :risk_level_id, :status,
+      (:user_id, :tree_id, :disease_id, :risk_level_id, :diagnosis_history_id, :status,
        :current_moa_group_id, :current_chemical_id,
        :group_attempt_no, :product_attempt_no, :spray_round_no,
-       :last_spray_date, :next_spray_date, :last_evaluation)"
+       :start_spray_date, :last_spray_date, :next_spray_date, :last_evaluation)"
   );
 
   $st->execute([
@@ -113,12 +116,14 @@ try {
     ':tree_id' => $tree_id,
     ':disease_id' => $disease_id,
     ':risk_level_id' => $risk_level_id,
+    ':diagnosis_history_id' => $diagnosis_history_id,
     ':status' => $status,
     ':current_moa_group_id' => $current_moa_group_id,
     ':current_chemical_id' => $current_chemical_id,
     ':group_attempt_no' => $group_attempt_no,
     ':product_attempt_no' => $product_attempt_no,
     ':spray_round_no' => $spray_round_no,
+    ':start_spray_date' => $start_spray_date,
     ':last_spray_date' => $last_spray_date,
     ':next_spray_date' => $next_spray_date,
     ':last_evaluation' => $last_evaluation,

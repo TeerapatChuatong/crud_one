@@ -27,6 +27,16 @@ function dbh(): PDO {
   json_err('DB_ERROR', 'db_not_initialized', 500);
 }
 
+function has_column(PDO $db, string $table, string $col): bool {
+  $st = $db->prepare(
+    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?"
+  );
+  $st->execute([$table, $col]);
+  return ((int)$st->fetchColumn()) > 0;
+}
+
+
 function opt_int($v): ?int {
   if ($v === null || $v === '') return null;
   if (!ctype_digit((string)$v)) json_err('VALIDATION_ERROR', 'invalid_int', 400);
@@ -53,6 +63,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
 
 $db = dbh();
 
+
+$usageSelect = has_column($db, 'chemicals', 'usage_rate') ? 'c.usage_rate' : 'NULL AS usage_rate';
 $chemical_id = opt_int($_GET['chemical_id'] ?? null);
 $moa_group_id = opt_int($_GET['moa_group_id'] ?? null);
 $target_type = opt_enum($_GET['target_type'] ?? null, ['fungicide','bactericide','insecticide','other']);
@@ -69,6 +81,7 @@ try {
         c.trade_name AS chemical_name,
         c.trade_name,
         c.active_ingredient,
+        $usageSelect,
         c.target_type,
         c.moa_group_id,
         mg.moa_code,
@@ -92,7 +105,8 @@ try {
       c.trade_name AS chemical_name,
       c.trade_name,
       c.active_ingredient,
-      c.target_type,
+        $usageSelect,
+        c.target_type,
       c.moa_group_id,
       mg.moa_code,
       mg.group_name AS moa_group_name,

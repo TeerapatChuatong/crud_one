@@ -12,6 +12,16 @@ function dbh(): PDO {
   json_err('DB_ERROR', 'db_not_initialized', 500);
 }
 
+function has_column(PDO $db, string $table, string $col): bool {
+  $st = $db->prepare(
+    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?"
+  );
+  $st->execute([$table, $col]);
+  return ((int)$st->fetchColumn()) > 0;
+}
+
+
 function read_json_body(): array {
   $raw = file_get_contents('php://input');
   $data = json_decode($raw, true);
@@ -70,6 +80,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'PATCH' && ($_SERVER['REQUEST_METHOD'
 $db = dbh();
 $data = read_json_body();
 
+
+$hasUsageRate = has_column($db, 'chemicals', 'usage_rate');
 $id = $data['chemical_id'] ?? ($_GET['chemical_id'] ?? null);
 $id = require_int($id, 'invalid_chemical_id');
 
@@ -85,6 +97,20 @@ try {
 
   if ($v_trade_name !== null) { $sets[] = "trade_name = :trade_name"; $params[':trade_name'] = $v_trade_name; }
   if ($v_active_ingredient !== null) { $sets[] = "active_ingredient = :active_ingredient"; $params[':active_ingredient'] = $v_active_ingredient; }
+
+  // ✅ usage_rate (คอลัมน์ใหม่)
+  // อัปเดตเฉพาะเมื่อส่ง key มา (รองรับเคลียร์เป็น NULL)
+  if ($hasUsageRate && array_key_exists('usage_rate', $data)) {
+    $rawUsage = $data['usage_rate'];
+    if ($rawUsage === null || trim((string)$rawUsage) === '') {
+      $sets[] = "usage_rate = NULL";
+    } else {
+      $v_usage_rate = opt_str($rawUsage, 150);
+      $sets[] = "usage_rate = :usage_rate";
+      $params[':usage_rate'] = $v_usage_rate;
+    }
+  }
+
   if ($v_target_type !== null) { $sets[] = "target_type = :target_type"; $params[':target_type'] = $v_target_type; }
   if ($v_notes !== null) { $sets[] = "notes = :notes"; $params[':notes'] = $v_notes; }
   if ($v_is_active !== null) { $sets[] = "is_active = :is_active"; $params[':is_active'] = $v_is_active; }

@@ -1,4 +1,4 @@
-    <?php
+<?php
 // รองรับทั้งกรณี db.php อยู่ใน api/ หรืออยู่ที่ root CRUD/
 $dbPath = __DIR__ . '/../db.php';
 if (!file_exists($dbPath)) $dbPath = __DIR__ . '/../../db.php';
@@ -85,6 +85,9 @@ function opt_enum($v, array $allowed, string $code) : ?string {
 
     $db = dbh();
 
+
+$hasUsageRate = has_column($db, 'chemicals', 'usage_rate');
+$usageSelect = $hasUsageRate ? 'c.usage_rate' : 'NULL AS usage_rate';
     try {
       $q = trim((string)($_GET['q'] ?? ''));
       if ($q === '') {
@@ -96,7 +99,11 @@ function opt_enum($v, array $allowed, string $code) : ?string {
       $target_type = opt_enum($_GET['target_type'] ?? null, ['fungicide','bactericide','insecticide','other'], 'target_type_invalid');
       $is_active = opt_bool01($_GET['is_active'] ?? null, 'is_active_invalid');
 
-      $sql = "SELECT c.chemical_id, c.trade_name, c.active_ingredient, c.target_type, c.moa_group_id, mg.moa_code, mg.group_name AS moa_group_name, c.notes, c.is_active FROM chemicals c LEFT JOIN moa_groups mg ON mg.moa_group_id = c.moa_group_id WHERE (c.trade_name LIKE :q OR c.active_ingredient LIKE :q OR mg.moa_code LIKE :q OR mg.group_name LIKE :q) AND (:moa_group_id IS NULL OR c.moa_group_id = :moa_group_id) AND (:target_type IS NULL OR c.target_type = :target_type) AND (:is_active IS NULL OR c.is_active = :is_active) ORDER BY c.chemical_id DESC";
+      $whereSearch = "(c.trade_name LIKE :q OR c.active_ingredient LIKE :q OR mg.moa_code LIKE :q OR mg.group_name LIKE :q";
+if ($hasUsageRate) $whereSearch .= " OR c.usage_rate LIKE :q";
+$whereSearch .= ")";
+
+$sql = "SELECT c.chemical_id, c.trade_name, c.active_ingredient, $usageSelect, c.target_type, c.moa_group_id, mg.moa_code, mg.group_name AS moa_group_name, c.notes, c.is_active FROM chemicals c LEFT JOIN moa_groups mg ON mg.moa_group_id = c.moa_group_id WHERE " . $whereSearch . " AND (:moa_group_id IS NULL OR c.moa_group_id = :moa_group_id) AND (:target_type IS NULL OR c.target_type = :target_type) AND (:is_active IS NULL OR c.is_active = :is_active) ORDER BY c.chemical_id DESC";
       $st = $db->prepare($sql);
 
       $params = [':q' => ('%' . $q . '%')];

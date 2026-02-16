@@ -35,6 +35,7 @@ try {
         min_score,
         COALESCE(days,0)  AS days,
         COALESCE(times,0) AS times,
+        COALESCE(evaluation_after_days, COALESCE(days,0)) AS evaluation_after_days,
         COALESCE(sprays_per_product,2)     AS sprays_per_product,
         COALESCE(max_products_per_group,2) AS max_products_per_group,
         COALESCE(max_sprays_per_group,2)   AS max_sprays_per_group
@@ -70,6 +71,7 @@ try {
         min_score,
         COALESCE(days,0)  AS days,
         COALESCE(times,0) AS times,
+        COALESCE(evaluation_after_days, COALESCE(days,0)) AS evaluation_after_days,
         COALESCE(sprays_per_product,2)     AS sprays_per_product,
         COALESCE(max_products_per_group,2) AS max_products_per_group,
         COALESCE(max_sprays_per_group,2)   AS max_sprays_per_group
@@ -91,6 +93,7 @@ try {
           min_score,
           COALESCE(days,0)  AS days,
           COALESCE(times,0) AS times,
+          COALESCE(evaluation_after_days, COALESCE(days,0)) AS evaluation_after_days,
           COALESCE(sprays_per_product,2)     AS sprays_per_product,
           COALESCE(max_products_per_group,2) AS max_products_per_group,
           COALESCE(max_sprays_per_group,2)   AS max_sprays_per_group
@@ -138,7 +141,8 @@ try {
       min_score,
       COALESCE(days,0)  AS days,
       COALESCE(times,0) AS times,
-      COALESCE(sprays_per_product,2)     AS sprays_per_product,
+        COALESCE(evaluation_after_days, COALESCE(days,0)) AS evaluation_after_days,
+        COALESCE(sprays_per_product,2)     AS sprays_per_product,
       COALESCE(max_products_per_group,2) AS max_products_per_group,
       COALESCE(max_sprays_per_group,2)   AS max_sprays_per_group
     FROM disease_risk_levels

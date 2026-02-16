@@ -13,7 +13,6 @@ $disease_th = trim($body['name_th'] ?? $body['disease_th'] ?? '');
 $disease_en = trim($body['name_en'] ?? $body['disease_en'] ?? '');
 
 // ฟิลด์ใหม่ (แก้ symptoms -> symptom ตาม DB)
-$description = $body['description'] ?? null;
 $causes      = $body['causes'] ?? null;
 $symptom     = $body['symptom'] ?? $body['symptoms'] ?? null; // รองรับทั้ง 2 แบบ
 $image_url   = $body['image_url'] ?? null;
@@ -25,7 +24,6 @@ $normNullableText = function ($v) {
   return $v === '' ? null : $v;
 };
 
-$description = $normNullableText($description);
 $causes      = $normNullableText($causes);
 $symptom     = $normNullableText($symptom);
 $image_url   = $normNullableText($image_url);
@@ -49,14 +47,13 @@ try {
 
   // 4) INSERT ลงตาราง diseases (แก้ symptoms -> symptom)
   $st = $dbh->prepare("
-    INSERT INTO diseases (disease_id, disease_th, disease_en, description, causes, symptom, image_url)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO diseases (disease_id, disease_th, disease_en, causes, symptom, image_url)
+    VALUES (?, ?, ?, ?, ?, ?)
   ");
   $st->execute([
     $disease_id,
     $disease_th,
     $final_en,
-    $description,
     $causes,
     $symptom,
     $image_url,
@@ -66,7 +63,6 @@ try {
     "disease_id"  => $disease_id,
     "disease_th"  => $disease_th,
     "disease_en"  => $final_en,
-    "description" => $description,
     "causes"      => $causes,
     "symptom"     => $symptom,
     "image_url"   => $image_url,

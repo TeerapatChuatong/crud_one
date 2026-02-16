@@ -15,12 +15,11 @@ try {
       FROM diseases
       WHERE disease_th LIKE ?
          OR disease_en LIKE ?
-         OR description LIKE ?
          OR causes LIKE ?
          OR symptoms LIKE ?
       ORDER BY CAST(disease_id AS UNSIGNED) ASC
     ");
-    $st->execute([$like, $like, $like, $like, $like]);
+    $st->execute([$like, $like, $like, $like]);
   } else {
     $st = $dbh->query("SELECT * FROM diseases ORDER BY CAST(disease_id AS UNSIGNED) ASC");
   }

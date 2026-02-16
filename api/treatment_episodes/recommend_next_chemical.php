@@ -74,41 +74,117 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 $tree_id = int_param('tree_id', 0);
 $disease_id = int_param('disease_id', 0);
 $risk_level_id = int_param('risk_level_id', 0);
+$diagnosis_history_id = int_param('diagnosis_history_id', 0);
 $user_id = int_param('user_id', 0);
+if ($user_id <= 0 && isset($AUTH_USER_ID)) $user_id = (int)$AUTH_USER_ID;
 
 if ($risk_level_id <= 0) {
   json_response(false, null, 'risk_level_id is required', 400);
 }
 
+// ------------------------------------------------------------
+// 0) Resolve disease_id + level_code from risk_level_id
+//    (and apply special rule for Greening)
+// ------------------------------------------------------------
+$risk_level_disease_id = 0;
+$risk_level_code = '';
+try {
+  $st = $pdo->prepare(
+    "SELECT disease_id, level_code\n" .
+    "FROM disease_risk_levels\n" .
+    "WHERE risk_level_id = ?\n" .
+    "LIMIT 1"
+  );
+  $st->execute([$risk_level_id]);
+  $rl = $st->fetch(PDO::FETCH_ASSOC);
+  if ($rl) {
+    $risk_level_disease_id = (int)($rl['disease_id'] ?? 0);
+    $risk_level_code = strtolower(trim((string)($rl['level_code'] ?? '')));
+  }
+} catch (Throwable $e) {
+  // ignore
+}
+
+// If caller didn't send disease_id, infer from risk_level_id
+if ($disease_id <= 0 && $risk_level_disease_id > 0) {
+  $disease_id = $risk_level_disease_id;
+}
+
+// ✅ Business rule (Greening vector-control chemicals):
+// - Greening (disease_id=5)
+//   - medium: still recommend vector-control chemicals (normal flow)
+//   - high ("รุนแรงมาก"): DO NOT recommend any chemical
+$skip_recommendation = false;
+$skip_reason = null;
+$skip_message = null;
+if ($disease_id === 5) {
+  // treat "high" as "รุนแรงมาก"; also support possible future codes
+  $no_recommend_codes = ['high', 'very_high', 'severe', 'very_severe', 'extreme'];
+  if (in_array($risk_level_code, $no_recommend_codes, true)) {
+    $skip_recommendation = true;
+    $skip_reason = 'greening_severity_too_high';
+    $skip_message = 'Greening (high severity): no chemical recommendation.';
+  }
+}
+
+// -----------------------------
 // -----------------------------
 // 1) Find/create active episode
 // -----------------------------
 $episode_id = null;
 $episode_row = null;
+$current_group_id = 0;
+
 try {
   if ($user_id > 0 && $tree_id > 0 && $disease_id > 0) {
-    $st = $pdo->prepare(
-      "SELECT * FROM treatment_episodes\n" .
-      "WHERE user_id = ? AND tree_id = ? AND disease_id = ? AND status = 'active'\n" .
-      "ORDER BY episode_id DESC LIMIT 1"
-    );
-    $st->execute([$user_id, $tree_id, $disease_id]);
-    $episode_row = $st->fetch(PDO::FETCH_ASSOC);
+
+    // Prefer the episode that matches diagnosis_history_id (if provided)
+    if ($diagnosis_history_id > 0) {
+      $st = $pdo->prepare(
+        "SELECT * FROM treatment_episodes\n" .
+        "WHERE user_id = ? AND tree_id = ? AND disease_id = ? AND status = 'active' AND diagnosis_history_id = ?\n" .
+        "ORDER BY episode_id DESC LIMIT 1"
+      );
+      $st->execute([$user_id, $tree_id, $disease_id, $diagnosis_history_id]);
+      $episode_row = $st->fetch(PDO::FETCH_ASSOC);
+    }
+
+    // Fallback: latest active episode for this tree+disease
+    if (!$episode_row) {
+      $st = $pdo->prepare(
+        "SELECT * FROM treatment_episodes\n" .
+        "WHERE user_id = ? AND tree_id = ? AND disease_id = ? AND status = 'active'\n" .
+        "ORDER BY episode_id DESC LIMIT 1"
+      );
+      $st->execute([$user_id, $tree_id, $disease_id]);
+      $episode_row = $st->fetch(PDO::FETCH_ASSOC);
+    }
 
     if ($episode_row && isset($episode_row['episode_id'])) {
       $episode_id = (int)$episode_row['episode_id'];
+      $current_group_id = (int)($episode_row['current_moa_group_id'] ?? 0);
 
       // keep risk_level_id aligned if missing/wrong
       if ((int)($episode_row['risk_level_id'] ?? 0) !== $risk_level_id) {
         $up = $pdo->prepare("UPDATE treatment_episodes SET risk_level_id = ? WHERE episode_id = ?");
         $up->execute([$risk_level_id, $episode_id]);
       }
+
+      // fill diagnosis_history_id if missing/mismatch (when provided)
+      if ($diagnosis_history_id > 0) {
+        $ep_dh = (int)($episode_row['diagnosis_history_id'] ?? 0);
+        if ($ep_dh <= 0 || $ep_dh !== $diagnosis_history_id) {
+          $up = $pdo->prepare("UPDATE treatment_episodes SET diagnosis_history_id = ? WHERE episode_id = ?");
+          $up->execute([$diagnosis_history_id, $episode_id]);
+        }
+      }
+
     } else {
       $ins = $pdo->prepare(
-        "INSERT INTO treatment_episodes (user_id, tree_id, disease_id, risk_level_id, status)\n" .
-        "VALUES (?, ?, ?, ?, 'active')"
+        "INSERT INTO treatment_episodes (user_id, tree_id, disease_id, risk_level_id, diagnosis_history_id, status)\n" .
+        "VALUES (?, ?, ?, ?, ?, 'active')"
       );
-      $ins->execute([$user_id, $tree_id, $disease_id, $risk_level_id]);
+      $ins->execute([$user_id, $tree_id, $disease_id, $risk_level_id, ($diagnosis_history_id > 0 ? $diagnosis_history_id : null)]);
       $episode_id = (int)$pdo->lastInsertId();
     }
   }
@@ -117,11 +193,30 @@ try {
   $episode_id = $episode_id ?? null;
 }
 
+// If Greening is at very high severity, do not recommend any chemical.
+// (Still returns ok=true so the app can show other advice instead.)
+if ($skip_recommendation) {
+  json_response(true, [
+    'episode_id' => $episode_id,
+    'risk_level_id' => $risk_level_id,
+    'excluded_chemical_id' => null,
+    'chemical' => null,
+    'moa_group' => null,
+    'skip_recommendation' => true,
+    'reason' => $skip_reason,
+  ], $skip_message);
+}
+
 // --------------------------------------------
 // 2) Determine the chemical to exclude (current)
 // --------------------------------------------
 $exclude_chemical_id = int_param('exclude_chemical_id', 0);
 if ($exclude_chemical_id <= 0) $exclude_chemical_id = int_param('current_chemical_id', 0);
+
+// fallback to current_chemical_id from episode
+if ($exclude_chemical_id <= 0 && $episode_row && isset($episode_row['current_chemical_id'])) {
+  $exclude_chemical_id = (int)$episode_row['current_chemical_id'];
+}
 
 // If not provided, use latest user_used_chemicals
 if ($exclude_chemical_id <= 0 && $user_id > 0) {

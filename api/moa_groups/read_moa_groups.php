@@ -1,6 +1,7 @@
 <?php
 // read_moa_groups.php
-// รองรับทั้งกรณี db.php อยู่ใน api/ หรืออยู่ที่ root CRUD/
+// ✅ ลบ/ซ่อน HRAC (สารกำจัดวัชพืช) ออกจากผลลัพธ์
+
 $dbPath = __DIR__ . '/../db.php';
 if (!file_exists($dbPath)) $dbPath = __DIR__ . '/../../db.php';
 require_once $dbPath;
@@ -10,12 +11,15 @@ require_admin();
 function dbh(): PDO {
   if (isset($GLOBALS['pdo']) && $GLOBALS['pdo'] instanceof PDO) return $GLOBALS['pdo'];
   if (isset($GLOBALS['dbh']) && $GLOBALS['dbh'] instanceof PDO) return $GLOBALS['dbh'];
+
   json_err('DB_ERROR', 'db_not_initialized', 500);
+  exit; // ✅ ทำให้ Intelephense รู้ว่าจบแน่นอน
 }
 
 function has_column(PDO $db, string $table, string $col): bool {
   $st = $db->prepare(
-    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS\n     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?"
+    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?"
   );
   $st->execute([$table, $col]);
   return ((int)$st->fetchColumn()) > 0;
@@ -39,7 +43,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
 $db = dbh();
 
 try {
-  $allowedSystems = ['FRAC', 'IRAC', 'HRAC', 'OTHER'];
+  // ✅ HRAC ไม่อนุญาต
+  $allowedSystems = ['FRAC', 'OTHER'];
 
   // รองรับ schema ทั้งแบบ moa_system หรือ system
   $sysCol = null;
@@ -56,12 +61,10 @@ try {
   // fallback derive จาก group_name (เช่น FRAC 1A)
   $systemExpr = "CASE
     WHEN mg.group_name LIKE 'FRAC%' THEN 'FRAC'
-    WHEN mg.group_name LIKE 'IRAC%' THEN 'IRAC'
     WHEN mg.group_name LIKE 'HRAC%' THEN 'HRAC'
     ELSE 'OTHER'
   END";
 
-  // ถ้ามีคอลัมน์ system แต่เป็น NULL/'' ให้ fallback ไป derive
   $selectSystem = ($sysCol !== null)
     ? "COALESCE(NULLIF(mg.$sysCol,''), ($systemExpr))"
     : "($systemExpr)";
@@ -74,19 +77,22 @@ try {
       mg.description
     FROM moa_groups mg";
 
-  // read one
+  // read one (ยังอ่านได้ตาม id แต่ถ้าเป็น HRAC ให้ถือว่าไม่พบ)
   if ($id !== null && $id !== '') {
     $id = require_int($id, 'invalid_moa_group_id');
-    $st = $db->prepare($baseSelect . ' WHERE mg.moa_group_id = :id');
+    $st = $db->prepare($baseSelect . " WHERE mg.moa_group_id = :id");
     $st->execute([':id' => $id]);
     $row = $st->fetch(PDO::FETCH_ASSOC);
     if (!$row) json_err('NOT_FOUND', 'moa_groups_not_found', 404);
+    if (strtoupper((string)($row['moa_system'] ?? '')) === 'HRAC') {
+      json_err('NOT_FOUND', 'moa_groups_not_found', 404);
+    }
     echo json_encode($row, JSON_UNESCAPED_UNICODE);
     exit;
   }
 
-  // list
-  $where = ' WHERE 1=1';
+  // list: ✅ ซ่อน HRAC เสมอ
+  $where = " WHERE (($selectSystem) <> 'HRAC')";
   $params = [];
 
   if ($filterSystem !== null) {
@@ -94,7 +100,7 @@ try {
     $params[':sys'] = $filterSystem;
   }
 
-  $order = ' ORDER BY moa_system ASC, mg.moa_code ASC';
+  $order = " ORDER BY moa_system ASC, mg.moa_code ASC";
 
   $st = $db->prepare($baseSelect . $where . $order);
   $st->execute($params);
